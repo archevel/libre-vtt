@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebRTC Voice App</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>WebRTC Manual Signaling</h1>
+        <p>Create an invite, send the text to a friend, and have them paste it to connect.</p>
+      </header>
+      <main>
+        <div class="controls">
+          <button id="create-invite-btn">1. Create Invite Link</button>
+          <button id="copy-link-btn" style="display: none;">2. Copy Invite Link</button>
+        </div>
+        <textarea id="signaling-data" rows="10" placeholder="When you receive an ANSWER from your peer, paste it here..."></textarea>
+        <button id="submit-answer-btn">3. Submit Answer</button>
+        <audio id="remote-audio" controls></audio>
+      </main>
+    </div>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
