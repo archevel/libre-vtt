@@ -9,17 +9,24 @@
   <body>
     <div id="app">
       <header>
-        <h1>WebRTC Manual Signaling</h1>
-        <p>Create an invite, send the text to a friend, and have them paste it to connect.</p>
+        <h1>WebRTC VTT</h1>
+        <p>Session Status: <span id="session-status">Initializing...</span></p>
+        <p>My Peer ID: <span id="my-peer-id"></span></p>
       </header>
       <main>
-        <div class="controls">
-          <button id="create-invite-btn">1. Create Invite Link</button>
-          <button id="copy-link-btn" style="display: none;">2. Copy Invite Link</button>
+        <div id="gm-controls" class="controls" style="display: none;">
+          <button id="create-invite-btn">Create Invite</button>
+          <button id="copy-invite-btn" style="display: none;">Copy Invite Link</button>
         </div>
-        <textarea id="signaling-data" rows="10" placeholder="When you receive an ANSWER from your peer, paste it here..."></textarea>
-        <button id="submit-answer-btn">3. Submit Answer</button>
-        <audio id="remote-audio" controls></audio>
+        <div id="signaling-area">
+            <textarea id="signaling-data" rows="8" placeholder="Paste invite/answer data here..."></textarea>
+            <button id="process-input-btn">Process Input</button>
+        </div>
+        <div id="session-view">
+            <h2>Connected Peers</h2>
+            <ul id="peer-list"></ul>
+        </div>
+        <audio id="remote-audio" style="display: none;"></audio>
       </main>
     </div>
     <script type="module" src="/main.js"></script>
