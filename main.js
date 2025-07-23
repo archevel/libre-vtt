@@ -4,13 +4,23 @@ import { WebRTCManager } from './WebRTCManager.js';
 // --- DOM Elements ---
 const sessionStatus = document.getElementById('session-status');
 const myPeerIdEl = document.getElementById('my-peer-id');
-const gmControls = document.getElementById('gm-controls');
-const createInviteBtn = document.getElementById('create-invite-btn');
-const copyInviteBtn = document.getElementById('copy-invite-btn');
-const signalingText = document.getElementById('signaling-data');
-const processInputBtn = document.getElementById('process-input-btn');
 const peerList = document.getElementById('peer-list');
 const remoteAudio = document.getElementById('remote-audio');
+const vttBoard = document.getElementById('vtt-board');
+
+// GM Dialog elements
+const gmMainControls = document.getElementById('gm-main-controls');
+const openInviteDialogBtn = document.getElementById('open-invite-dialog-btn');
+const gmInviteDialog = document.getElementById('gm-invite-dialog');
+const createInviteBtn = document.getElementById('create-invite-btn');
+const copyInviteBtn = document.getElementById('copy-invite-btn');
+const gmSignalingData = document.getElementById('gm-signaling-data');
+const processGmInputBtn = document.getElementById('process-gm-input-btn');
+
+// Player Dialog elements
+const playerAnswerDialog = document.getElementById('player-answer-dialog');
+const playerSignalingData = document.getElementById('player-signaling-data');
+const copyPlayerAnswerBtn = document.getElementById('copy-player-answer-btn');
 
 // --- State Management ---
 const session = {
@@ -21,31 +31,64 @@ const session = {
   gmId: null, // For players, the ID of the GM
   // GM only: stores offers from players to share with new players
   p2pOffers: new Map(), // <peerId, offer>
+  vtt: {
+    layers: [
+      {
+        id: `layer_${Math.random().toString(36).substring(2, 9)}`,
+        name: 'Player Layer',
+        visibleToPlayers: true,
+        backgroundImage: null,
+        tokens: [],
+      }
+    ]
+  }
 };
 
 myPeerIdEl.textContent = session.myId;
 
 /** Determines role based on URL and initializes the application. */
-function initialize() {
+async function initialize() {
   if (window.location.hash) {
     // Player role: An invite hash is present.
     session.role = 'player';
-    updateStatus('Player mode. Invite data loaded from URL. Click "Process Input".');
-    signalingText.value = window.location.hash.substring(1);
+    updateStatus('Player mode. Processing invite from URL...');
+    const encodedInvite = window.location.hash.substring(1);
     history.pushState("", document.title, window.location.pathname + window.location.search);
+    try {
+      const payload = JSON.parse(atob(encodedInvite));
+      if (payload.type === 'invite') {
+        await handleInvite(payload);
+      } else {
+        updateStatus('Error: Invalid invite data in URL.');
+      }
+    } catch (err) {
+      console.error("Failed to process invite from URL:", err);
+      updateStatus('Error: Could not process invite from URL.');
+    }
   } else {
     // GM role: No invite hash.
     session.role = 'gm';
-    gmControls.style.display = 'block';
+    gmMainControls.style.display = 'block';
     updateStatus('GM mode. Create an invite to start.');
   }
   updatePeerList();
+  renderVtt();
 }
 
 /** Updates the status message in the UI. */
 function updateStatus(message) {
   console.log(`Status: ${message}`);
   sessionStatus.textContent = message;
+}
+
+/** Generic function to open a modal dialog. */
+function openModal(modalElement) {
+  modalElement.style.display = 'block';
+}
+
+/** Generic function to close a modal dialog. */
+function closeModal(modalElement) {
+  modalElement.style.display = 'none';
 }
 
 /** Renders the list of connected peers. */
@@ -59,6 +102,99 @@ function updatePeerList() {
     const li = document.createElement('li');
     li.textContent = peerId;
     peerList.appendChild(li);
+  }
+}
+
+/** Renders the entire VTT board based on the current session state. */
+function renderVtt() {
+  vttBoard.innerHTML = '';
+  session.vtt.layers.forEach(layer => {
+    // For players, only render layers marked as visible
+    if (session.role === 'player' && !layer.visibleToPlayers) {
+      return;
+    }
+
+    const layerEl = document.createElement('div');
+    layerEl.className = 'vtt-layer';
+    layerEl.dataset.layerId = layer.id;
+
+    layer.tokens.forEach(token => {
+      const tokenEl = document.createElement('div');
+      tokenEl.className = 'token';
+      tokenEl.dataset.tokenId = token.id;
+      tokenEl.style.left = `${token.x}px`;
+      tokenEl.style.top = `${token.y}px`;
+      tokenEl.style.backgroundColor = token.color;
+      tokenEl.textContent = token.peerId ? token.peerId.substring(0, 5) : 'NPC';
+
+      makeTokenDraggable(tokenEl, layer.id);
+      layerEl.appendChild(tokenEl);
+    });
+
+    vttBoard.appendChild(layerEl);
+  });
+}
+
+/** Adds drag-and-drop functionality to a token element. */
+function makeTokenDraggable(tokenEl, layerId) {
+  tokenEl.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const boardRect = vttBoard.getBoundingClientRect();
+    let startX = e.clientX;
+    let startY = e.clientY;
+
+    function onMouseMove(moveEvent) {
+      const dx = moveEvent.clientX - startX;
+      const dy = moveEvent.clientY - startY;
+      
+      const newLeft = Math.max(0, Math.min(boardRect.width - tokenEl.offsetWidth, tokenEl.offsetLeft + dx));
+      const newTop = Math.max(0, Math.min(boardRect.height - tokenEl.offsetHeight, tokenEl.offsetTop + dy));
+
+      tokenEl.style.left = `${newLeft}px`;
+      tokenEl.style.top = `${newTop}px`;
+
+      startX = moveEvent.clientX;
+      startY = moveEvent.clientY;
+    }
+
+    function onMouseUp() {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+
+      const newX = tokenEl.offsetLeft;
+      const newY = tokenEl.offsetTop;
+      const tokenId = tokenEl.dataset.tokenId;
+
+      // Optimistic update for local responsiveness. The element is already moved.
+      // We just need to update the state that would be used for a re-render.
+      const layer = session.vtt.layers.find(l => l.id === layerId);
+      const token = layer?.tokens.find(t => t.id === tokenId);
+      if (token) {
+        token.x = newX;
+        token.y = newY;
+      }
+
+      if (session.role === 'gm') {
+        // GM is authoritative, broadcasts the final position to all players.
+        broadcastMessage({ type: 'token-moved', layerId, tokenId, x: newX, y: newY });
+      } else {
+        // Player sends a request to the GM to validate and broadcast the move.
+        const gmConnection = session.peers.get(session.gmId);
+        if (gmConnection) {
+          gmConnection.send({ type: 'token-move-request', layerId, tokenId, x: newX, y: newY });
+        }
+      }
+    }
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+}
+
+/** Sends a message to all connected peers. */
+function broadcastMessage(message) {
+  for (const peer of session.peers.values()) {
+    peer.send(message);
   }
 }
 
@@ -94,9 +230,10 @@ async function createInvite() {
     const inviteLink = `${window.location.origin}${window.location.pathname}#${encodedPayload}`;
 
     // Update UI to show the link and copy button
-    signalingText.value = inviteLink;
+    gmSignalingData.value = inviteLink;
     copyInviteBtn.style.display = 'inline-block';
     updateStatus(`Invite link created. Copy the link and send it to a player.`);
+    createInviteBtn.disabled = false; // Re-enable for the next player
   } catch (err) {
     console.error('Error creating invite:', err);
     updateStatus('Error creating invite. Check console.');
@@ -109,7 +246,7 @@ async function createInvite() {
  * Copies the generated invite link from the text area to the clipboard.
  */
 function copyInviteLink() {
-  const link = signalingText.value;
+  const link = gmSignalingData.value;
   if (!link.startsWith('http')) {
     updateStatus('Error: No valid link in the text area to copy.');
     return;
@@ -123,23 +260,20 @@ function copyInviteLink() {
 }
 
 /**
- * Central handler for processing pasted signaling data.
- * It decodes the data and routes it to the correct handler based on its type.
+ * GM: Processes a player's answer pasted into the dialog.
  */
-async function processInput() {
-  const data = signalingText.value;
+async function processGmInput() {
+  const data = gmSignalingData.value;
   if (!data) return;
 
   try {
     const payload = JSON.parse(atob(data));
-    signalingText.value = ''; // Clear after processing
-
-    if (payload.type === 'invite' && session.role === 'player') {
-      await handleInvite(payload);
-    } else if (payload.type === 'answer' && session.role === 'gm') {
+    if (payload.type === 'answer') {
+      gmSignalingData.value = ''; // Clear after processing
       await handleAnswer(payload);
+      closeModal(gmInviteDialog); // Close dialog on success
     } else {
-      throw new Error(`Invalid payload type "${payload.type}" for role "${session.role}"`);
+      throw new Error(`Invalid payload type "${payload.type}" for GM input.`);
     }
   } catch (err) {
     console.error('Error processing input:', err);
@@ -174,8 +308,9 @@ async function handleInvite(payload) {
     await iceGatheringPromise;
 
     const answerPayload = { type: 'answer', inviteId: payload.inviteId, from: session.myId, answer: rtcManager.peerConnection.localDescription };
-    signalingText.value = btoa(JSON.stringify(answerPayload));
-    updateStatus('Answer created. Copy text and send back to the GM.');
+    playerSignalingData.value = btoa(JSON.stringify(answerPayload));
+    openModal(playerAnswerDialog);
+    updateStatus('Answer created. Send the copied text back to the GM.');
   } catch (err) {
     console.error('Error handling invite:', err);
     updateStatus('Error handling invite. Check console.');
@@ -219,6 +354,17 @@ function setupDataChannelHandlers(rtcManager, peerId) {
     if (session.role === 'gm') {
       // 1. Send existing peer offers to the new player
       const offers = Array.from(session.p2pOffers.entries());
+
+      // Create a token for the new player
+      const playerLayer = session.vtt.layers.find(l => l.name === 'Player Layer');
+      if (playerLayer) {
+        const newPlayerToken = { id: `token_${peerId}`, peerId, x: 50, y: 50, color: `#${Math.floor(Math.random()*16777215).toString(16)}` };
+        playerLayer.tokens.push(newPlayerToken);
+        // Render the new token on the GM's screen and then send the update
+        renderVtt();
+        broadcastMessage({ type: 'game-state-update', vtt: session.vtt });
+      }
+
       if (offers.length > 0) {
         rtcManager.send({ type: 'p2p-offer-list', offers });
       }
@@ -232,6 +378,38 @@ function setupDataChannelHandlers(rtcManager, peerId) {
     console.log(`Received message from ${peerId}:`, msg);
 
     switch (msg.type) {
+      // Any peer receives a full game state update from the GM
+      case 'game-state-update':
+        session.vtt = msg.vtt;
+        renderVtt();
+        break;
+
+      // GM receives a request from a player to move a token
+      case 'token-move-request':
+        if (session.role === 'gm') {
+          const layer = session.vtt.layers.find(l => l.id === msg.layerId);
+          const token = layer?.tokens.find(t => t.id === msg.tokenId);
+          if (token) {
+            token.x = msg.x;
+            token.y = msg.y;
+            // GM approves the move and broadcasts the new authoritative position to ALL peers.
+            renderVtt(); // Render the move on the GM's screen first
+            broadcastMessage({ type: 'token-moved', layerId: msg.layerId, tokenId: msg.tokenId, x: msg.x, y: msg.y });
+          }
+        }
+        break;
+
+      // Any peer receives an authoritative "token has moved" message from the GM
+      case 'token-moved':
+        const layer = session.vtt.layers.find(l => l.id === msg.layerId);
+        const token = layer?.tokens.find(t => t.id === msg.tokenId);
+        if (token) {
+          token.x = msg.x;
+          token.y = msg.y;
+          renderVtt();
+        }
+        break;
+
       // Player sends its P2P offer to the GM
       case 'p2p-offer':
         if (session.role === 'gm') {
@@ -330,7 +508,19 @@ function setupDataChannelHandlers(rtcManager, peerId) {
 }
 
 // --- Event Listeners ---
-window.addEventListener('DOMContentLoaded', initialize);
+window.addEventListener('DOMContentLoaded', () => initialize());
+
+// GM Dialog Listeners
+openInviteDialogBtn.addEventListener('click', () => openModal(gmInviteDialog));
+gmInviteDialog.querySelector('.close-button').addEventListener('click', () => closeModal(gmInviteDialog));
 createInviteBtn.addEventListener('click', createInvite);
 copyInviteBtn.addEventListener('click', copyInviteLink);
-processInputBtn.addEventListener('click', processInput);
+processGmInputBtn.addEventListener('click', processGmInput);
+
+// Player Dialog Listeners
+copyPlayerAnswerBtn.addEventListener('click', () => {
+  navigator.clipboard.writeText(playerSignalingData.value).then(() => {
+    updateStatus('Answer copied to clipboard!');
+    closeModal(playerAnswerDialog);
+  });
+});

@@ -7,27 +7,55 @@
     <link rel="stylesheet" href="style.css">
   </head>
   <body>
-    <div id="app">
-      <header>
-        <h1>WebRTC VTT</h1>
-        <p>Session Status: <span id="session-status">Initializing...</span></p>
-        <p>My Peer ID: <span id="my-peer-id"></span></p>
-      </header>
-      <main>
-        <div id="gm-controls" class="controls" style="display: none;">
-          <button id="create-invite-btn">Create Invite</button>
-          <button id="copy-invite-btn" style="display: none;">Copy Invite Link</button>
-        </div>
-        <div id="signaling-area">
-            <textarea id="signaling-data" rows="8" placeholder="Paste invite/answer data here..."></textarea>
-            <button id="process-input-btn">Process Input</button>
+    <div id="app-layout">
+      <aside id="side-panel">
+        <header>
+          <h1>WebRTC VTT</h1>
+          <p>Status: <span id="session-status">Initializing...</span></p>
+          <p>My ID: <span id="my-peer-id"></span></p>
+        </header>
+        <div id="gm-main-controls" class="controls" style="display: none;">
+            <button id="open-invite-dialog-btn">Manage Invites</button>
         </div>
         <div id="session-view">
             <h2>Connected Peers</h2>
             <ul id="peer-list"></ul>
         </div>
-        <audio id="remote-audio" style="display: none;"></audio>
+      </aside>
+      <main id="vtt-board-container">
+        <div id="vtt-board"></div>
       </main>
+    </div>
+
+    <audio id="remote-audio" style="display: none;"></audio>
+    
+      <!-- GM's Invite Management Dialog -->
+      <div id="gm-invite-dialog" class="modal">
+        <div class="modal-content">
+            <span class="close-button">&times;</span>
+            <h2>Invite Management</h2>
+            <div id="gm-invite-controls" class="controls">
+              <button id="create-invite-btn">Create Invite</button>
+              <button id="copy-invite-btn" style="display: none;">Copy Invite Link</button>
+            </div>
+            <div id="gm-signaling-area">
+                <textarea id="gm-signaling-data" rows="8" placeholder="Invite link will appear here, or paste a player's answer."></textarea>
+                <button id="process-gm-input-btn">Process Player Answer</button>
+            </div>
+        </div>
+      </div>
+
+      <!-- Player's Answer Dialog -->
+      <div id="player-answer-dialog" class="modal">
+        <div class="modal-content">
+            <h2>Answer Generated</h2>
+            <p>Your answer has been created. Copy the text below and send it back to the GM.</p>
+            <div id="player-signaling-area">
+                <textarea id="player-signaling-data" rows="8" readonly></textarea>
+                <button id="copy-player-answer-btn">Copy Answer</button>
+            </div>
+        </div>
+      </div>
     </div>
     <script type="module" src="/main.js"></script>
   </body>
