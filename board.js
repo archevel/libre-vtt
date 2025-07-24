@@ -103,6 +103,18 @@ export class BoardManager {
         tokenEl.style.backgroundColor = token.color;
         tokenEl.textContent = token.name || (token.peerId ? token.peerId.substring(0, 5) : 'NPC');
 
+        // Add a highlight for the user's own token
+        if (token.peerId === this.session.myId) {
+            tokenEl.style.borderColor = '#64caff';
+            tokenEl.style.boxShadow = '0 0 8px #64caff';
+        }
+
+        // Add a tooltip to explain interactions
+        tokenEl.title = `Token: ${token.name || 'Unnamed'}\nRight-click: Claim/Unclaim`;
+        if (this.session.role === 'gm') {
+            tokenEl.title += '\nShift + Right-click: Delete';
+        }
+
         this.makeTokenDraggable(tokenEl, layerEl, layer.id, token);
         layerEl.appendChild(tokenEl);
       });
@@ -227,15 +239,29 @@ export class BoardManager {
    * @param {object} tokenData The token's data object from the session state.
    */
   makeTokenDraggable(tokenEl, layerEl, layerId, tokenData) {
-    // GM can delete any token via right-click
-    if (this.session.role === 'gm') {
-      tokenEl.addEventListener('contextmenu', (e) => {
+    tokenEl.addEventListener('contextmenu', (e) => {
         e.preventDefault();
-        if (confirm(`Are you sure you want to delete the token "${tokenData.name || tokenData.id}"?`)) {
-          this._deleteToken(layerId, tokenData.id);
-        }
-      });
+        e.stopPropagation();
 
+        if (this.session.role === 'gm' && e.shiftKey) {
+            // GM-only delete action
+            if (confirm(`DELETE token "${tokenData.name || tokenData.id}"?`)) {
+                this._deleteToken(layerId, tokenData.id);
+            }
+        } else {
+            // Claim/Unclaim action for everyone
+            const isMyToken = tokenData.peerId === this.session.myId;
+            const isUnclaimed = tokenData.peerId === null;
+
+            if (isMyToken) {
+                if (confirm('Unclaim this token?')) this._unclaimToken(layerId, tokenData.id);
+            } else if (isUnclaimed) {
+                if (confirm('Claim this token for yourself?')) this._claimToken(layerId, tokenData.id);
+            }
+        }
+    });
+
+    if (this.session.role === 'gm') {
       tokenEl.addEventListener('dblclick', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -411,6 +437,48 @@ export class BoardManager {
         } else {
             alert("Invalid size. Please enter a positive number.");
         }
+    }
+  }
+
+  /** @private */
+  _claimToken(layerId, tokenId) {
+    if (this.session.role === 'gm') {
+        // First, unclaim any other token this user currently owns
+        this.session.vtt.layers.forEach(l => {
+            l.tokens.forEach(t => {
+                if (t.peerId === this.session.myId) {
+                    t.peerId = null;
+                }
+            });
+        });
+
+        // Then, claim the new token
+        const layer = this.session.vtt.layers.find(l => l.id === layerId);
+        const token = layer?.tokens.find(t => t.id === tokenId);
+        if (token) {
+            token.peerId = this.session.myId;
+        }
+
+        this.renderVtt();
+        this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+    } else {
+        // Player sends a request to the GM
+        this.callbacks.sendClaimTokenRequest(layerId, tokenId);
+    }
+  }
+
+  /** @private */
+  _unclaimToken(layerId, tokenId) {
+    if (this.session.role === 'gm') {
+        const layer = this.session.vtt.layers.find(l => l.id === layerId);
+        const token = layer?.tokens.find(t => t.id === tokenId);
+        if (token && token.peerId === this.session.myId) {
+            token.peerId = null;
+            this.renderVtt();
+            this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+        }
+    } else {
+        this.callbacks.sendUnclaimTokenRequest(layerId, tokenId);
     }
   }
 

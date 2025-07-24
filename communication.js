@@ -145,6 +145,30 @@ export class CommunicationManager {
   }
 
   /**
+   * Player: Sends a request to the GM to claim a token.
+   * @param {string} layerId The ID of the layer containing the token.
+   * @param {string} tokenId The ID of the token being claimed.
+   */
+  sendClaimTokenRequest(layerId, tokenId) {
+    const gmConnection = this.session.peers.get(this.session.gmId);
+    if (gmConnection) {
+      gmConnection.send({ type: 'claim-token-request', layerId, tokenId });
+    }
+  }
+
+  /**
+   * Player: Sends a request to the GM to unclaim a token.
+   * @param {string} layerId The ID of the layer containing the token.
+   * @param {string} tokenId The ID of the token being unclaimed.
+   */
+  sendUnclaimTokenRequest(layerId, tokenId) {
+    const gmConnection = this.session.peers.get(this.session.gmId);
+    if (gmConnection) {
+      gmConnection.send({ type: 'unclaim-token-request', layerId, tokenId });
+    }
+  }
+
+  /**
    * Sets up the data channel and connection state handlers for a given connection.
    * @param {WebRTCManager} rtcManager The manager for the connection.
    * @param {string} peerId The ID of the peer being connected to.
@@ -206,9 +230,19 @@ export class CommunicationManager {
 
         if (this.session.role === 'gm') {
           this.session.p2pOffers.delete(peerId);
-          // Remove the player's token
+          // Unclaim or remove tokens associated with the disconnected player
           this.session.vtt.layers.forEach(layer => {
-              layer.tokens = layer.tokens.filter(token => token.peerId !== peerId);
+              // Find the token that was created specifically for this player and remove it
+              const playerTokenIndex = layer.tokens.findIndex(token => token.id === `token_${peerId}`);
+              if (playerTokenIndex > -1) {
+                  layer.tokens.splice(playerTokenIndex, 1);
+              }
+              // Find any other tokens this player might have claimed and unclaim them
+              layer.tokens.forEach(token => {
+                  if (token.peerId === peerId) {
+                      token.peerId = null;
+                  }
+              });
           });
           this.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
         }
@@ -255,6 +289,39 @@ export class CommunicationManager {
         }
         break;
       }
+
+      case 'claim-token-request':
+        if (this.session.role === 'gm') {
+          // Unclaim any other token owned by the requesting player
+          this.session.vtt.layers.forEach(l => {
+              l.tokens.forEach(t => {
+                  if (t.peerId === peerId) {
+                      t.peerId = null;
+                  }
+              });
+          });
+          // Claim the new token
+          const layer = this.session.vtt.layers.find(l => l.id === msg.layerId);
+          const token = layer?.tokens.find(t => t.id === msg.tokenId);
+          if (token) {
+              token.peerId = peerId;
+          }
+          this.ui.renderVtt();
+          this.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+        }
+        break;
+
+      case 'unclaim-token-request':
+        if (this.session.role === 'gm') {
+            const layer = this.session.vtt.layers.find(l => l.id === msg.layerId);
+            const token = layer?.tokens.find(t => t.id === msg.tokenId);
+            if (token && token.peerId === peerId) {
+                token.peerId = null;
+                this.ui.renderVtt();
+                this.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+            }
+        }
+        break;
 
       case 'p2p-offer':
         if (this.session.role === 'gm') {

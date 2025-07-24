@@ -85,11 +85,6 @@ const ui = {
 
 /** Determines role based on URL and initializes the application. */
 async function initialize() {
-  const boardManagerCallbacks = {
-    broadcastMessage,
-    sendTokenMoveRequest: (...args) => communicationManager.sendTokenMoveRequest(...args),
-  };
-
   communicationManager = new CommunicationManager(session, ui);
 
   if (window.location.hash) {
@@ -118,6 +113,12 @@ async function initialize() {
   }
   updatePeerList();
   
+  const boardManagerCallbacks = {
+    broadcastMessage,
+    sendTokenMoveRequest: (...args) => communicationManager.sendTokenMoveRequest(...args),
+    sendClaimTokenRequest: (...args) => communicationManager.sendClaimTokenRequest(...args),
+    sendUnclaimTokenRequest: (...args) => communicationManager.sendUnclaimTokenRequest(...args),
+  };
   
   const boardManagerElements = {
     vttBoard,
