@@ -317,6 +317,7 @@ export class BoardManager {
 
         if (this.session.role === 'gm') {
           this.callbacks.broadcastMessage({ type: 'token-moved', layerId, tokenId, x: newX, y: newY });
+          this.callbacks.updateDistanceBasedAudio();
         } else {
           this.callbacks.sendTokenMoveRequest(layerId, tokenId, newX, newY);
         }
@@ -460,6 +461,7 @@ export class BoardManager {
         }
 
         this.renderVtt();
+        this.callbacks.updateDistanceBasedAudio();
         this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
     } else {
         // Player sends a request to the GM
@@ -475,6 +477,7 @@ export class BoardManager {
         if (token && token.peerId === this.session.myId) {
             token.peerId = null;
             this.renderVtt();
+            this.callbacks.updateDistanceBasedAudio();
             this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
         }
     } else {

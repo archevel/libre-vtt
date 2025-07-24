@@ -47,6 +47,7 @@ const session = {
   myId: `peer_${Math.random().toString(36).substring(2, 9)}`,
   peers: new Map(), // <peerId, WebRTCManager>
   peerAudioElements: new Map(), // <peerId, HTMLAudioElement>
+  peerVolumes: new Map(), // <peerId, number> User-set max volume
   localStream: null, // To store the user's media stream
   gmId: null, // For players, the ID of the GM
   // GM only: stores offers from players to share with new players
@@ -73,6 +74,7 @@ const ui = {
   updatePeerList,
   renderVtt: () => boardManager?.renderVtt(),
   renderLayerControls: () => boardManager?.renderLayerControls(),
+  updateDistanceBasedAudio,
   openModal,
   elements: {
     createInviteBtn,
@@ -118,6 +120,7 @@ async function initialize() {
     sendTokenMoveRequest: (...args) => communicationManager.sendTokenMoveRequest(...args),
     sendClaimTokenRequest: (...args) => communicationManager.sendClaimTokenRequest(...args),
     sendUnclaimTokenRequest: (...args) => communicationManager.sendUnclaimTokenRequest(...args),
+    updateDistanceBasedAudio,
   };
   
   const boardManagerElements = {
@@ -168,6 +171,54 @@ function closeModal(modalElement) {
   modalElement.style.display = 'none';
 }
 
+/**
+ * Updates peer audio volumes based on the distance between claimed tokens.
+ */
+function updateDistanceBasedAudio() {
+    const myToken = findMyToken();
+    if (!myToken) {
+        // If I don't have a claimed token, reset all volumes to their manual settings.
+        for (const [peerId, audioEl] of session.peerAudioElements.entries()) {
+            audioEl.volume = session.peerVolumes.get(peerId) ?? 1;
+        }
+        return;
+    }
+
+    const allTokens = session.vtt.layers.flatMap(l => l.tokens);
+
+    for (const [peerId, audioEl] of session.peerAudioElements.entries()) {
+        const peerToken = allTokens.find(t => t.peerId === peerId);
+        const maxVolume = session.peerVolumes.get(peerId) ?? 1;
+
+        if (peerToken) {
+            // This peer has a claimed token, so calculate distance-based volume.
+            const distance = Math.hypot(myToken.x - peerToken.x, myToken.y - peerToken.y);
+            const maxAudibleDistance = 1200; // This can be tuned for best effect.
+            const minVolume = 0.05;
+
+            const clampedDistance = Math.min(distance, maxAudibleDistance);
+            const volumeRatio = 1 - (clampedDistance / maxAudibleDistance); // 1 (close) to 0 (far)
+
+            // Interpolate between the minimum and the user-set maximum volume.
+            const finalVolume = minVolume + (maxVolume - minVolume) * volumeRatio;
+            audioEl.volume = finalVolume;
+        } else {
+            // This peer does not have a claimed token, so use the manual volume setting.
+            audioEl.volume = maxVolume;
+        }
+    }
+}
+
+/**
+ * Finds the token claimed by the current user in the session.
+ * @returns {object|null} The token object or null if not found.
+ */
+function findMyToken() {
+    return session.vtt.layers
+        .flatMap(l => l.tokens)
+        .find(t => t.peerId === session.myId);
+}
+
 /** Renders the list of connected peers. */
 function updatePeerList() {
   peerList.innerHTML = '';
@@ -208,10 +259,11 @@ function updatePeerList() {
       volumeSlider.min = 0;
       volumeSlider.max = 1;
       volumeSlider.step = 0.05;
-      volumeSlider.value = audioEl.volume;
+      volumeSlider.value = session.peerVolumes.get(peerId) ?? 1; // Use stored volume or default to 1
       volumeSlider.className = 'volume-slider';
       volumeSlider.oninput = () => {
-        audioEl.volume = volumeSlider.value;
+        session.peerVolumes.set(peerId, parseFloat(volumeSlider.value));
+        updateDistanceBasedAudio(); // Recalculate all volumes based on the new max value
       };
 
       controlsContainer.appendChild(muteBtn);

@@ -248,6 +248,7 @@ export class CommunicationManager {
         }
         this.ui.updatePeerList();
         this.ui.renderVtt();
+        this.ui.updateDistanceBasedAudio();
       }
     };
   }
@@ -263,7 +264,10 @@ export class CommunicationManager {
     switch (msg.type) {
       case 'game-state-update':
         this.session.vtt = msg.vtt;
+        // A full state update should re-render everything.
         this.ui.renderVtt();
+        this.ui.renderLayerControls();
+        this.ui.updateDistanceBasedAudio();
         break;
 
       case 'token-move-request':
@@ -274,6 +278,7 @@ export class CommunicationManager {
             token.x = msg.x;
             token.y = msg.y;
             this.ui.renderVtt();
+            this.ui.updateDistanceBasedAudio();
             this.broadcastMessage({ type: 'token-moved', layerId: msg.layerId, tokenId: msg.tokenId, x: msg.x, y: msg.y });
           }
         }
@@ -286,6 +291,7 @@ export class CommunicationManager {
           token.x = msg.x;
           token.y = msg.y;
           this.ui.renderVtt();
+          this.ui.updateDistanceBasedAudio();
         }
         break;
       }
@@ -307,6 +313,7 @@ export class CommunicationManager {
               token.peerId = peerId;
           }
           this.ui.renderVtt();
+          this.ui.updateDistanceBasedAudio();
           this.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
         }
         break;
@@ -318,6 +325,7 @@ export class CommunicationManager {
             if (token && token.peerId === peerId) {
                 token.peerId = null;
                 this.ui.renderVtt();
+                this.ui.updateDistanceBasedAudio();
                 this.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
             }
         }
