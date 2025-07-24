@@ -105,16 +105,19 @@ export class CommunicationManager {
       throw new Error(`No pending invite found for inviteId: ${payload.inviteId}`);
     }
 
-    await rtcManager.setRemoteDescription(payload.answer);
-
+    // Re-map the connection from the temporary inviteId to the final peerId
     this.session.peers.delete(payload.inviteId);
     this.session.peers.set(payload.from, rtcManager);
     rtcManager.id = payload.from;
 
+    // Setup handlers *before* setting the remote description, as setting it
+    // can trigger events like 'ontrack'.
+    this._setupConnectionHandlers(rtcManager, payload.from);
+
+    await rtcManager.setRemoteDescription(payload.answer);
+
     this.ui.updateStatus(`Connection with ${payload.from} is being established.`);
     this.ui.updatePeerList();
-
-    this._setupConnectionHandlers(rtcManager, payload.from);
   }
 
   /**
@@ -147,6 +150,21 @@ export class CommunicationManager {
    * @param {string} peerId The ID of the peer being connected to.
    */
   _setupConnectionHandlers(rtcManager, peerId) {
+    rtcManager.ontrack = (event) => {
+      console.log(`Received track from ${peerId}`);
+      if (event.streams && event.streams[0]) {
+        let audioEl = this.session.peerAudioElements.get(peerId);
+        if (!audioEl) {
+          audioEl = document.createElement('audio');
+          audioEl.autoplay = true;
+          document.body.appendChild(audioEl); // Add to body, keep it out of sight
+          this.session.peerAudioElements.set(peerId, audioEl);
+        }
+        audioEl.srcObject = event.streams[0];
+        this.ui.updatePeerList(); // Re-render peer list to show controls
+      }
+    };
+
     rtcManager.ondatachannelopen = () => {
       this.ui.updateStatus(`Data channel with ${peerId} is open.`);
 
@@ -179,6 +197,13 @@ export class CommunicationManager {
       if (state === 'disconnected' || state === 'failed' || state === 'closed') {
         this.ui.updateStatus(`Peer ${peerId} has disconnected.`);
         this.session.peers.delete(peerId);
+
+        const audioEl = this.session.peerAudioElements.get(peerId);
+        if (audioEl) {
+          audioEl.remove(); // Remove from DOM
+          this.session.peerAudioElements.delete(peerId);
+        }
+
         if (this.session.role === 'gm') {
           this.session.p2pOffers.delete(peerId);
           // Remove the player's token

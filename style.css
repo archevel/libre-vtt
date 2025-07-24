@@ -15,7 +15,9 @@
 
 body {
   margin: 0; /* Remove default margin */
-  overflow: hidden; /* Prevent scrollbars on the body */
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
 }
 
 .controls {
@@ -63,8 +65,8 @@ textarea {
 #app-layout {
   display: grid;
   grid-template-columns: 300px 1fr; /* Sidebar and main content */
-  height: 100vh;
-  width: 100vw;
+  flex: 1; /* Make the main layout fill the available space */
+  overflow: hidden; /* Prevent this container from scrolling */
 }
 
 #side-panel {
@@ -75,6 +77,62 @@ textarea {
   gap: 1.5rem;
   overflow-y: auto;
   text-align: center;
+}
+
+#peer-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #3a3a3a;
+  text-align: left;
+}
+
+#peer-list li:last-child {
+  border-bottom: none;
+}
+
+#gm-layer-controls {
+    text-align: left;
+    border-bottom: 1px solid #3a3a3a;
+    padding-bottom: 1rem;
+}
+
+#gm-layer-controls h2 {
+    margin-top: 0;
+    text-align: center;
+}
+
+#layer-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 1rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.layer-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem;
+    background-color: #2f2f2f;
+    border-radius: 4px;
+}
+
+.layer-item-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.layer-item-controls button,
+.button-like-label {
+    padding: 0.2em 0.6em;
+    font-size: 0.8em;
+    min-width: 40px;
+    text-align: center;
 }
 
 #vtt-board-container {
@@ -101,6 +159,9 @@ textarea {
   left: 0;
   width: 100%;
   height: 100%;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 .token {
@@ -156,4 +217,123 @@ textarea {
   color: white;
   text-decoration: none;
   cursor: pointer;
+}
+
+#app-header {
+  background-color: #1a1a1a;
+  padding: 0 1rem;
+  height: 50px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid #3a3a3a;
+  flex-shrink: 0; /* Prevent header from shrinking */
+  gap: 1rem;
+}
+
+#app-header h1 {
+  font-size: 1.2em;
+  margin: 0.5rem 0;
+}
+
+#app-footer {
+  background-color: #1a1a1a;
+  padding: 0.25rem 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  border-top: 1px solid #3a3a3a;
+  font-size: 0.8em;
+  flex-shrink: 0; /* Prevent footer from shrinking */
+}
+
+#app-footer p {
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hamburger-button {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.87);
+  padding: 0.5rem;
+  margin: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background-color 0.25s;
+}
+
+.hamburger-button:hover {
+  background-color: #3a3a3a;
+}
+
+#main-menu {
+  position: absolute;
+  top: 50px; /* Match header height */
+  left: 0;
+  background-color: #2f2f2f;
+  padding: 1rem;
+  border-right: 1px solid #3a3a3a;
+  border-bottom: 1px solid #3a3a3a;
+  border-bottom-right-radius: 8px;
+  box-shadow: 3px 3px 10px rgba(0,0,0,0.3);
+  transition: transform 0.3s ease-in-out, visibility 0.3s;
+  z-index: 900; /* Below modals (1000) */
+}
+
+#main-menu .controls {
+  margin-bottom: 0;
+}
+
+#main-menu.main-menu-hidden {
+  transform: translateX(-110%);
+  visibility: hidden;
+}
+
+#main-menu.main-menu-visible {
+  transform: translateX(0);
+  visibility: visible;
+}
+
+.peer-id-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-right: 1rem;
+  font-size: 0.9em;
+}
+
+.peer-audio-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0; /* Prevent controls from shrinking */
+}
+
+.mute-btn {
+  padding: 0.2em 0.6em;
+  font-size: 0.8em;
+  min-width: 60px; /* To prevent layout shift between Mute/Unmute */
+}
+
+.volume-slider {
+  width: 80px;
+  accent-color: #646cff;
+}
+
+.button-like-label {
+    display: inline-block;
+    font-weight: 500;
+    font-family: inherit;
+    background-color: #1a1a1a;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 0.25s;
+    color: white;
 }

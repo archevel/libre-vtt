@@ -3,19 +3,33 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WebRTC Voice App</title>
+    <title>Libre VTT</title>
     <link rel="stylesheet" href="style.css">
   </head>
   <body>
+    <header id="app-header">
+      <button id="hamburger-menu-btn" class="hamburger-button" aria-label="Open menu" aria-controls="main-menu" aria-expanded="false">
+        <svg viewBox="0 0 100 80" width="24" height="24" fill="currentColor">
+          <rect width="100" height="15" rx="8"></rect>
+          <rect y="30" width="100" height="15" rx="8"></rect>
+          <rect y="60" width="100" height="15" rx="8"></rect>
+        </svg>
+      </button>
+      <h1>Libre VTT</h1>
+    </header>
+    <nav id="main-menu" class="main-menu-hidden">
+      <div id="gm-main-controls" class="controls" style="display: none;">
+          <button id="open-invite-dialog-btn">Manage Invites</button>
+      </div>
+    </nav>
     <div id="app-layout">
       <aside id="side-panel">
-        <header>
-          <h1>WebRTC VTT</h1>
-          <p>Status: <span id="session-status">Initializing...</span></p>
-          <p>My ID: <span id="my-peer-id"></span></p>
-        </header>
-        <div id="gm-main-controls" class="controls" style="display: none;">
-            <button id="open-invite-dialog-btn">Manage Invites</button>
+        <div id="gm-layer-controls" style="display: none;">
+            <h2>Layers</h2>
+            <ul id="layer-list"></ul>
+            <div class="controls">
+                <button id="add-layer-btn">Add New Layer</button>
+            </div>
         </div>
         <div id="session-view">
             <h2>Connected Peers</h2>
@@ -27,8 +41,6 @@
       </main>
     </div>
 
-    <audio id="remote-audio" style="display: none;"></audio>
-    
       <!-- GM's Invite Management Dialog -->
       <div id="gm-invite-dialog" class="modal">
         <div class="modal-content">
@@ -56,9 +68,15 @@
             </div>
         </div>
       </div>
-    </div>
+
+    <footer id="app-footer">
+      <p>Status: <span id="session-status">Initializing...</span></p>
+      <p>My ID: <span id="my-peer-id"></span></p>
+    </footer>
+
     <script type="module" src="./webrtc.js"></script>
     <script type="module" src="./communication.js"></script>
+    <script type="module" src="./board.js"></script>
     <script type="module" src="./main.js"></script>
   </body>
 </html>

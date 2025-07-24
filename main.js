@@ -1,11 +1,18 @@
 import { CommunicationManager } from './communication.js';
+import { BoardManager } from './board.js';
 
 // --- DOM Elements ---
 const sessionStatus = document.getElementById('session-status');
+const hamburgerMenuBtn = document.getElementById('hamburger-menu-btn');
+const mainMenu = document.getElementById('main-menu');
 const myPeerIdEl = document.getElementById('my-peer-id');
 const peerList = document.getElementById('peer-list');
-const remoteAudio = document.getElementById('remote-audio');
 const vttBoard = document.getElementById('vtt-board');
+
+// GM Layer elements
+const gmLayerControls = document.getElementById('gm-layer-controls');
+const layerList = document.getElementById('layer-list');
+const addLayerBtn = document.getElementById('add-layer-btn');
 
 // GM Dialog elements
 const gmMainControls = document.getElementById('gm-main-controls');
@@ -23,12 +30,14 @@ const copyPlayerAnswerBtn = document.getElementById('copy-player-answer-btn');
 
 // --- App Modules ---
 let communicationManager;
+let boardManager;
 
 // --- State Management ---
 const session = {
   role: 'idle', // 'gm' | 'player'
   myId: `peer_${Math.random().toString(36).substring(2, 9)}`,
   peers: new Map(), // <peerId, WebRTCManager>
+  peerAudioElements: new Map(), // <peerId, HTMLAudioElement>
   localStream: null, // To store the user's media stream
   gmId: null, // For players, the ID of the GM
   // GM only: stores offers from players to share with new players
@@ -52,7 +61,8 @@ myPeerIdEl.textContent = session.myId;
 const ui = {
   updateStatus,
   updatePeerList,
-  renderVtt,
+  renderVtt: () => boardManager?.renderVtt(),
+  renderLayerControls: () => boardManager?.renderLayerControls(),
   openModal,
   elements: {
     createInviteBtn,
@@ -65,7 +75,20 @@ const ui = {
 
 /** Determines role based on URL and initializes the application. */
 async function initialize() {
+  const boardManagerCallbacks = {
+    broadcastMessage,
+    sendTokenMoveRequest: (...args) => communicationManager.sendTokenMoveRequest(...args),
+  };
+  const boardManagerElements = {
+    vttBoard,
+    layerList,
+    addLayerBtn,
+  };
+  boardManager = new BoardManager(session, boardManagerCallbacks, boardManagerElements);
+  boardManager.initializeEventListeners();
+
   communicationManager = new CommunicationManager(session, ui);
+
   if (window.location.hash) {
     // Player role: An invite hash is present.
     session.role = 'player';
@@ -87,16 +110,38 @@ async function initialize() {
     // GM role: No invite hash.
     session.role = 'gm';
     gmMainControls.style.display = 'block';
+    gmLayerControls.style.display = 'block';
     updateStatus('GM mode. Create an invite to start.');
   }
   updatePeerList();
-  renderVtt();
+  boardManager.renderLayerControls();
+  boardManager.renderVtt();
 }
 
 /** Updates the status message in the UI. */
 function updateStatus(message) {
   console.log(`Status: ${message}`);
   sessionStatus.textContent = message;
+}
+
+/**
+ * Toggles the visibility of the main hamburger menu.
+ * @param {boolean} [forceState] - `true` to show, `false` to hide. Toggles if undefined.
+ */
+function toggleMainMenu(forceState) {
+    const isVisible = mainMenu.classList.contains('main-menu-visible');
+    // If forceState is a boolean, use it. Otherwise, toggle the current state.
+    const show = typeof forceState === 'boolean' ? forceState : !isVisible;
+
+    if (show) {
+        mainMenu.classList.remove('main-menu-hidden');
+        mainMenu.classList.add('main-menu-visible');
+        hamburgerMenuBtn.setAttribute('aria-expanded', 'true');
+    } else {
+        mainMenu.classList.remove('main-menu-visible');
+        mainMenu.classList.add('main-menu-hidden');
+        hamburgerMenuBtn.setAttribute('aria-expanded', 'false');
+    }
 }
 
 /** Generic function to open a modal dialog. */
@@ -116,94 +161,52 @@ function updatePeerList() {
     peerList.innerHTML = '<li>No peers connected.</li>';
     return;
   }
-  for (const peerId of session.peers.keys()) {
+  // Sort peers to keep GM at the top if present, then alphabetically
+  const sortedPeers = Array.from(session.peers.keys()).sort((a, b) => {
+    if (a === session.gmId) return -1;
+    if (b === session.gmId) return 1;
+    return a.localeCompare(b);
+  });
+
+  for (const peerId of sortedPeers) {
     const li = document.createElement('li');
-    li.textContent = peerId;
+
+    const peerIdText = document.createElement('span');
+    peerIdText.className = 'peer-id-text';
+    peerIdText.textContent = peerId === session.gmId ? `${peerId} (GM)` : peerId;
+    li.appendChild(peerIdText);
+
+    const audioEl = session.peerAudioElements.get(peerId);
+    if (audioEl) {
+      const controlsContainer = document.createElement('div');
+      controlsContainer.className = 'peer-audio-controls';
+
+      const muteBtn = document.createElement('button');
+      muteBtn.className = 'mute-btn';
+      muteBtn.textContent = audioEl.muted ? 'Unmute' : 'Mute';
+      muteBtn.onclick = () => {
+        audioEl.muted = !audioEl.muted;
+        muteBtn.textContent = audioEl.muted ? 'Unmute' : 'Mute';
+      };
+
+      const volumeSlider = document.createElement('input');
+      volumeSlider.type = 'range';
+      volumeSlider.min = 0;
+      volumeSlider.max = 1;
+      volumeSlider.step = 0.05;
+      volumeSlider.value = audioEl.volume;
+      volumeSlider.className = 'volume-slider';
+      volumeSlider.oninput = () => {
+        audioEl.volume = volumeSlider.value;
+      };
+
+      controlsContainer.appendChild(muteBtn);
+      controlsContainer.appendChild(volumeSlider);
+      li.appendChild(controlsContainer);
+    }
+
     peerList.appendChild(li);
   }
-}
-
-/** Renders the entire VTT board based on the current session state. */
-function renderVtt() {
-  vttBoard.innerHTML = '';
-  session.vtt.layers.forEach(layer => {
-    // For players, only render layers marked as visible
-    if (session.role === 'player' && !layer.visibleToPlayers) {
-      return;
-    }
-
-    const layerEl = document.createElement('div');
-    layerEl.className = 'vtt-layer';
-    layerEl.dataset.layerId = layer.id;
-
-    layer.tokens.forEach(token => {
-      const tokenEl = document.createElement('div');
-      tokenEl.className = 'token';
-      tokenEl.dataset.tokenId = token.id;
-      tokenEl.style.left = `${token.x}px`;
-      tokenEl.style.top = `${token.y}px`;
-      tokenEl.style.backgroundColor = token.color;
-      tokenEl.textContent = token.peerId ? token.peerId.substring(0, 5) : 'NPC';
-
-      makeTokenDraggable(tokenEl, layer.id);
-      layerEl.appendChild(tokenEl);
-    });
-
-    vttBoard.appendChild(layerEl);
-  });
-}
-
-/** Adds drag-and-drop functionality to a token element. */
-function makeTokenDraggable(tokenEl, layerId) {
-  tokenEl.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    const boardRect = vttBoard.getBoundingClientRect();
-    let startX = e.clientX;
-    let startY = e.clientY;
-
-    function onMouseMove(moveEvent) {
-      const dx = moveEvent.clientX - startX;
-      const dy = moveEvent.clientY - startY;
-
-      const newLeft = Math.max(0, Math.min(boardRect.width - tokenEl.offsetWidth, tokenEl.offsetLeft + dx));
-      const newTop = Math.max(0, Math.min(boardRect.height - tokenEl.offsetHeight, tokenEl.offsetTop + dy));
-
-      tokenEl.style.left = `${newLeft}px`;
-      tokenEl.style.top = `${newTop}px`;
-
-      startX = moveEvent.clientX;
-      startY = moveEvent.clientY;
-    }
-
-    function onMouseUp() {
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-
-      const newX = tokenEl.offsetLeft;
-      const newY = tokenEl.offsetTop;
-      const tokenId = tokenEl.dataset.tokenId;
-
-      // Optimistic update for local responsiveness. The element is already moved.
-      // We just need to update the state that would be used for a re-render.
-      const layer = session.vtt.layers.find(l => l.id === layerId);
-      const token = layer?.tokens.find(t => t.id === tokenId);
-      if (token) {
-        token.x = newX;
-        token.y = newY;
-      }
-
-      if (session.role === 'gm') {
-        // GM is authoritative, broadcasts the final position to all players.
-        broadcastMessage({ type: 'token-moved', layerId, tokenId, x: newX, y: newY });
-      } else {
-        // Player sends a request to the GM to validate and broadcast the move.
-        communicationManager.sendTokenMoveRequest(layerId, tokenId, newX, newY);
-      }
-    }
-
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  });
 }
 
 /** Sends a message to all connected peers. */
@@ -261,6 +264,21 @@ async function processGmInput() {
 
 // --- Event Listeners ---
 window.addEventListener('DOMContentLoaded', () => initialize());
+
+hamburgerMenuBtn.addEventListener('click', (e) => {
+    // Prevent this click from bubbling up to the document listener
+    e.stopPropagation();
+    toggleMainMenu();
+});
+
+// Close menu if clicking outside of it
+document.addEventListener('click', (e) => {
+    // The menu button's click handler stops propagation, so this won't fire for the button.
+    // We only need to check if the click was outside the menu itself when it's open.
+    if (mainMenu.classList.contains('main-menu-visible') && !mainMenu.contains(e.target)) {
+        toggleMainMenu(false); // Force close
+    }
+});
 
 // GM Dialog Listeners
 openInviteDialogBtn.addEventListener('click', () => openModal(gmInviteDialog));
