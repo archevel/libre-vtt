@@ -175,7 +175,7 @@ export class CommunicationManager {
         // Create a token for the new player
         const playerLayer = this.session.vtt.layers.find(l => l.name === 'Player Layer');
         if (playerLayer) {
-          const newPlayerToken = { id: `token_${peerId}`, peerId, x: 50, y: 50, color: `#${Math.floor(Math.random()*16777215).toString(16)}` };
+          const newPlayerToken = { id: `token_${peerId}`, peerId, x: 50, y: 50, color: `#${Math.floor(Math.random()*16777215).toString(16).padStart(6, '0')}`, scale: 1 };
           playerLayer.tokens.push(newPlayerToken);
           this.ui.renderVtt();
           this.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });

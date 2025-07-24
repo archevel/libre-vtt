@@ -93,9 +93,11 @@ export class BoardManager {
         tokenEl.className = 'token';
         tokenEl.dataset.tokenId = token.id;
         const baseTokenSize = 40;
-        const tokenScale = this.session.vtt.tokenScale || 1;
-        tokenEl.style.width = `${baseTokenSize * tokenScale}px`;
-        tokenEl.style.height = `${baseTokenSize * tokenScale}px`;
+        const globalTokenScale = this.session.vtt.tokenScale || 1;
+        const individualTokenScale = token.scale || 1;
+        const finalTokenSize = baseTokenSize * globalTokenScale * individualTokenScale;
+        tokenEl.style.width = `${finalTokenSize}px`;
+        tokenEl.style.height = `${finalTokenSize}px`;
         tokenEl.style.left = `${token.x}px`;
         tokenEl.style.top = `${token.y}px`;
         tokenEl.style.backgroundColor = token.color;
@@ -232,6 +234,12 @@ export class BoardManager {
         if (confirm(`Are you sure you want to delete the token "${tokenData.name || tokenData.id}"?`)) {
           this._deleteToken(layerId, tokenData.id);
         }
+      });
+
+      tokenEl.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this._editToken(layerId, tokenData.id);
       });
     }
 
@@ -376,12 +384,34 @@ export class BoardManager {
       name: npcName,
       x: 50,
       y: 50,
-      color: `#${Math.floor(Math.random()*16777215).toString(16).padStart(6, '0')}`
+      color: `#${Math.floor(Math.random()*16777215).toString(16).padStart(6, '0')}`,
+      scale: 1,
     };
 
     layer.tokens.push(newNpcToken);
     this.renderVtt();
     this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+  }
+
+  /** @private */
+  _editToken(layerId, tokenId) {
+    const layer = this.session.vtt.layers.find(l => l.id === layerId);
+    const token = layer?.tokens.find(t => t.id === tokenId);
+    if (!token) return;
+
+    const currentScale = token.scale || 1;
+    const newScaleStr = prompt(`Enter new size multiplier for token "${token.name || token.id}" (e.g., 0.5, 1, 2):`, currentScale);
+
+    if (newScaleStr) {
+        const newScale = parseFloat(newScaleStr);
+        if (!isNaN(newScale) && newScale > 0) {
+            token.scale = newScale;
+            this.renderVtt();
+            this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+        } else {
+            alert("Invalid size. Please enter a positive number.");
+        }
+    }
   }
 
   /** @private */
