@@ -1,6 +1,3 @@
-import './style.css'
-import { WebRTCManager } from './WebRTCManager.js';
-
 // --- DOM Elements ---
 const sessionStatus = document.getElementById('session-status');
 const myPeerIdEl = document.getElementById('my-peer-id');

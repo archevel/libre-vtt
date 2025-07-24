@@ -1,7 +1,7 @@
 /**
  * Manages the WebRTC peer connection and signaling process.
  */
-export class WebRTCManager {
+class WebRTCManager {
   /**
    * @param {string} id A unique identifier for this connection instance.
    * @param {RTCConfiguration} [config] - Configuration for the RTCPeerConnection.
