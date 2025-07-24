@@ -18,14 +18,25 @@
       <h1>Libre VTT</h1>
     </header>
     <nav id="main-menu" class="main-menu-hidden">
-      <div id="gm-main-controls" class="controls" style="display: none;">
-          <button id="open-invite-dialog-btn">Manage Invites</button>
+      <div id="gm-main-controls" style="display: none;">
+          <a href="#" id="open-invite-dialog-btn" class="menu-link">Manage Invites</a>
+          <a href="#" id="load-board-btn" class="menu-link">Load Board</a>
+          <a href="#" id="save-board-btn" class="menu-link">Save Board</a>
+          <a href="#" id="export-board-btn" class="menu-link">Export Board</a>
+          <label for="import-board-input" class="menu-link">Import Board</label>
+          <input type="file" id="import-board-input" accept=".json,application/json" style="display: none;">
+          <hr class="menu-separator">
+          <a href="https://github.com/archevel/libre-vtt" target="_blank" rel="noopener noreferrer" class="menu-link">View Source on GitHub</a>
       </div>
     </nav>
     <div id="app-layout">
       <aside id="side-panel">
         <div id="gm-layer-controls" style="display: none;">
             <h2>Layers</h2>
+            <div id="gm-token-scale-controls">
+                <label for="token-scale-slider">Token Size</label>
+                <input type="range" id="token-scale-slider" min="0.5" max="3" step="0.1" value="1">
+            </div>
             <ul id="layer-list"></ul>
             <div class="controls">
                 <button id="add-layer-btn">Add New Layer</button>
@@ -66,6 +77,18 @@
                 <textarea id="player-signaling-data" rows="8" readonly></textarea>
                 <button id="copy-player-answer-btn">Copy Answer</button>
             </div>
+        </div>
+      </div>
+
+      <!-- Load Board Dialog -->
+      <div id="load-board-dialog" class="modal">
+        <div class="modal-content">
+            <span class="close-button">&times;</span>
+            <h2>Load Board State</h2>
+            <p>Select a saved state to load. This will overwrite the current board.</p>
+            <ul id="saved-states-list">
+                <!-- Saved states will be populated here by JS -->
+            </ul>
         </div>
       </div>
 

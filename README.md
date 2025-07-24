@@ -1,6 +1,16 @@
-# WebRTC Virtual Tabletop (VTT)
+# Libre VTT
 
-This project is a proof-of-concept for a truly serverless Virtual Tabletop (VTT) application that runs entirely in the browser. It uses WebRTC to establish direct peer-to-peer voice connections between all participants.
+Libre VTT is a modern, lightweight, and serverless Virtual Tabletop (VTT) that runs entirely in your browser. It uses WebRTC to establish direct peer-to-peer connections for voice chat and real-time game state synchronization, all without a dedicated backend server.
+
+## Features
+
+*   **Serverless Architecture**: Uses the Game Master's browser as a temporary signaling hub to connect players.
+*   **Peer-to-Peer Voice Chat**: High-quality, low-latency audio directly between all participants.
+*   **Layer-Based Board**: Create and manage multiple layers for maps, tokens, and hidden information.
+*   **Dynamic Backgrounds**: Set a background image for any layer, with GM controls for positioning and scaling.
+*   **Token Management**: GMs can add, move, and delete NPC tokens. All users can move any visible token. A global token scale slider allows for easy size adjustments.
+*   **GM Controls**: Toggle layer visibility for players (hidden layers appear transparent for the GM).
+*   **Session Persistence**: Save, load, import, and export the entire board state, including all layers, backgrounds, and tokens.
 
 ## Core Concept: The GM as a Signaling Hub
 
@@ -11,7 +21,7 @@ This application sidesteps that requirement by elevating the Game Master's (GM) 
 The connection process works as follows:
 
 1.  **Initial Connection (GM to Player)**:
-    - The GM starts a session and generates a unique invite link.
+    - The GM starts a session and generates a unique invite link from the menu.
     - The GM sends this link to a Player.
     - The Player opens the link, which contains the GM's connection offer. The Player's browser automatically generates an answer.
     - The Player copies this answer and sends it back to the GM (e.g., via a messaging app).
@@ -38,7 +48,7 @@ This process is repeated for every new player, resulting in a full mesh network 
 
 1.  **Clone the repository:**
     ```bash
-    git clone <your-repo-url>
+    git clone https://github.com/archevel/libre-vtt.git
     cd libre-vtt
     ```
 
@@ -58,6 +68,15 @@ This process is repeated for every new player, resulting in a full mesh network 
     Your browser will show a privacy warning because the SSL certificate is self-signed. This is safe for local development. Click "Advanced" and "Proceed" to continue.
 
 5.  **Using the App:**
-    - **GM Role**: Open the link in a browser. You are the GM. Click "Create Invite" and send the generated link to your players.
-    - **Player Role**: Open the invite link from the GM. The app will load the invite data. Click "Process Input" to generate an answer. Copy this answer text and send it back to the GM.
-    - The GM pastes the player's answer into their "Process Input" text area to establish the connection. The mesh network will then be built automatically.
+    - **GM Role**: Open the application in your browser. You are the GM.
+      1. Open the hamburger menu (☰) and click "Manage Invites".
+      2. Click "Create Invite" and then "Copy Invite Link".
+      3. Send the copied link to your players.
+      4. When a player sends you their "Answer" text, paste it into the text area in the "Manage Invites" dialog and click "Process Player Answer".
+
+    - **Player Role**:
+      1. Open the invite link from the GM.
+      2. A dialog will appear with your "Answer" text. Click "Copy Answer".
+      3. Send this copied text back to the GM.
+
+    Once the GM processes your answer, you will be connected. The application will then automatically build direct connections to all other players in the session.

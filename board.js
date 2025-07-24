@@ -15,7 +15,9 @@ export class BoardManager {
     this.callbacks = callbacks;
     this.elements = elements;
 
-    if (!this.elements.vttBoard || !this.elements.layerList || !this.elements.addLayerBtn) {
+    this.backgroundEditStates = new Map(); // <layerId, boolean>
+
+    if (!this.elements.vttBoard || !this.elements.layerList || !this.elements.addLayerBtn || !this.elements.tokenScaleSlider) {
       console.error("BoardManager is missing required DOM elements.");
     }
   }
@@ -25,8 +27,16 @@ export class BoardManager {
    * This should be called once after the manager is created.
    */
   initializeEventListeners() {
+    console.log("initializing board");
     if (this.session.role === 'gm') {
       this.elements.addLayerBtn.addEventListener('click', () => this.addNewLayer());
+      this.elements.tokenScaleSlider.addEventListener('input', (e) => {
+        const newScale = parseFloat(e.target.value);
+        this.session.vtt.tokenScale = newScale;
+        this.renderVtt();
+        // This could be debounced in the future if performance becomes an issue.
+        this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+      });
     }
   }
 
@@ -35,7 +45,15 @@ export class BoardManager {
    */
   renderVtt() {
     this.elements.vttBoard.innerHTML = '';
-    this.session.vtt.layers.forEach(layer => {
+
+    // Create a sorted copy of layers to ensure the Player Layer is always on top.
+    const sortedLayers = [...this.session.vtt.layers].sort((a, b) => {
+      if (a.name === 'Player Layer') return 1; // Move a to the end
+      if (b.name === 'Player Layer') return -1; // Move b to the end
+      return 0; // Keep original order for other layers
+    });
+
+    sortedLayers.forEach(layer => {
       // For players, only render layers marked as visible
       if (this.session.role === 'player' && !layer.visibleToPlayers) {
         return;
@@ -45,20 +63,45 @@ export class BoardManager {
       layerEl.className = 'vtt-layer';
       layerEl.dataset.layerId = layer.id;
 
-      if (layer.backgroundImage) {
-        layerEl.style.backgroundImage = `url(${layer.backgroundImage})`;
+      // For GM, make hidden layers semi-transparent instead of hiding them
+      if (this.session.role === 'gm' && !layer.visibleToPlayers) {
+        layerEl.style.opacity = '0.25';
+      }
+
+      if (layer.background) {
+        layerEl.style.left = `${layer.background.x || 0}px`;
+        layerEl.style.top = `${layer.background.y || 0}px`;
+        layerEl.style.width = `${layer.background.width * layer.background.scale}px`;
+        layerEl.style.height = `${layer.background.height * layer.background.scale}px`;
+        layerEl.style.backgroundImage = `url(${layer.background.url})`;
+
+        if (this.session.role === 'gm' && this.backgroundEditStates.get(layer.id)) {
+            layerEl.classList.add('editing-background');
+            this._makeBackgroundDraggable(layerEl, layer);
+        }
+      } else {
+        // If a layer has no background, it should not intercept mouse events,
+        // allowing clicks to pass through to layers below.
+        // Tokens on this layer will still be interactive.
+        layerEl.style.pointerEvents = 'none';
+        layerEl.style.width = '100%';
+        layerEl.style.height = '100%';
       }
 
       layer.tokens.forEach(token => {
         const tokenEl = document.createElement('div');
         tokenEl.className = 'token';
         tokenEl.dataset.tokenId = token.id;
+        const baseTokenSize = 40;
+        const tokenScale = this.session.vtt.tokenScale || 1;
+        tokenEl.style.width = `${baseTokenSize * tokenScale}px`;
+        tokenEl.style.height = `${baseTokenSize * tokenScale}px`;
         tokenEl.style.left = `${token.x}px`;
         tokenEl.style.top = `${token.y}px`;
         tokenEl.style.backgroundColor = token.color;
-        tokenEl.textContent = token.peerId ? token.peerId.substring(0, 5) : 'NPC';
+        tokenEl.textContent = token.name || (token.peerId ? token.peerId.substring(0, 5) : 'NPC');
 
-        this.makeTokenDraggable(tokenEl, layer.id);
+        this.makeTokenDraggable(tokenEl, layerEl, layer.id, token);
         layerEl.appendChild(tokenEl);
       });
 
@@ -73,24 +116,33 @@ export class BoardManager {
     if (this.session.role !== 'gm' || !this.elements.layerList) return;
     this.elements.layerList.innerHTML = '';
 
+    // Set initial value for the token scale slider
+    if (this.elements.tokenScaleSlider) {
+      this.elements.tokenScaleSlider.value = this.session.vtt.tokenScale || 1;
+    }
+
     this.session.vtt.layers.forEach(layer => {
       const li = document.createElement('li');
       li.className = 'layer-item';
       li.dataset.layerId = layer.id;
 
+      // --- Top Row ---
+      const topRow = document.createElement('div');
+      topRow.className = 'layer-controls-row';
+
       const layerName = document.createElement('span');
       layerName.className = 'peer-id-text';
       layerName.textContent = layer.name;
-      li.appendChild(layerName);
+      topRow.appendChild(layerName);
 
-      const controls = document.createElement('div');
-      controls.className = 'layer-item-controls';
+      const topRowControls = document.createElement('div');
+      topRowControls.className = 'layer-item-controls';
 
       const visibilityBtn = document.createElement('button');
       visibilityBtn.textContent = layer.visibleToPlayers ? 'Visible' : 'Hidden';
       visibilityBtn.title = layer.visibleToPlayers ? 'Visible to players' : 'Hidden from players';
       visibilityBtn.onclick = () => this.toggleLayerVisibility(layer.id);
-      controls.appendChild(visibilityBtn);
+      topRowControls.appendChild(visibilityBtn);
 
       const backgroundLabel = document.createElement('label');
       backgroundLabel.className = 'button-like-label';
@@ -108,9 +160,58 @@ export class BoardManager {
       };
 
       backgroundLabel.appendChild(backgroundInput);
-      controls.appendChild(backgroundLabel);
+      topRowControls.appendChild(backgroundLabel);
 
-      li.appendChild(controls);
+      const isEditing = this.backgroundEditStates.get(layer.id);
+
+      // Background editing controls are only shown for the GM
+      if (layer.background) {
+        const editBgBtn = document.createElement('button');
+        editBgBtn.textContent = isEditing ? 'Done' : 'Edit BG';
+        editBgBtn.title = 'Toggle background editing';
+        editBgBtn.onclick = () => this._toggleBackgroundEditMode(layer.id);
+        topRowControls.appendChild(editBgBtn);
+      }
+
+      // Add NPC Token Button
+      const addNpcBtn = document.createElement('button');
+      addNpcBtn.textContent = 'NPC+';
+      addNpcBtn.title = 'Add NPC Token';
+      addNpcBtn.onclick = () => this._addNpcToken(layer.id);
+      topRowControls.appendChild(addNpcBtn);
+
+      topRow.appendChild(topRowControls);
+      li.appendChild(topRow);
+
+      // --- Bottom Row (Conditional) ---
+      if (isEditing && layer.background) {
+        const bottomRow = document.createElement('div');
+        bottomRow.className = 'layer-edit-controls';
+
+        const clearBgBtn = document.createElement('button');
+        clearBgBtn.className = 'clear-bg-btn';
+        clearBgBtn.textContent = '✕';
+        clearBgBtn.title = 'Clear background image';
+        clearBgBtn.onclick = () => this.clearLayerBackground(layer.id);
+        bottomRow.appendChild(clearBgBtn);
+
+        const scaleDownBtn = document.createElement('button');
+        scaleDownBtn.className = 'bg-scale-btn';
+        scaleDownBtn.textContent = '-';
+        scaleDownBtn.title = 'Scale Down Background';
+        scaleDownBtn.onclick = () => this._scaleLayerBackground(layer.id, 0.9);
+        bottomRow.appendChild(scaleDownBtn);
+
+        const scaleUpBtn = document.createElement('button');
+        scaleUpBtn.className = 'bg-scale-btn';
+        scaleUpBtn.textContent = '+';
+        scaleUpBtn.title = 'Scale Up Background';
+        scaleUpBtn.onclick = () => this._scaleLayerBackground(layer.id, 1.1);
+        bottomRow.appendChild(scaleUpBtn);
+
+        li.appendChild(bottomRow);
+      }
+
       this.elements.layerList.appendChild(li);
     });
   }
@@ -118,19 +219,47 @@ export class BoardManager {
   /**
    * Adds drag-and-drop functionality to a token element.
    * @private
+   * @param {HTMLElement} tokenEl The token's DOM element.
+   * @param {HTMLElement} layerEl The layer element the token is on.
+   * @param {string} layerId The ID of the layer the token belongs to.
+   * @param {object} tokenData The token's data object from the session state.
    */
-  makeTokenDraggable(tokenEl, layerId) {
+  makeTokenDraggable(tokenEl, layerEl, layerId, tokenData) {
+    // GM can delete any token via right-click
+    if (this.session.role === 'gm') {
+      tokenEl.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        if (confirm(`Are you sure you want to delete the token "${tokenData.name || tokenData.id}"?`)) {
+          this._deleteToken(layerId, tokenData.id);
+        }
+      });
+    }
+
     tokenEl.addEventListener('mousedown', (e) => {
+      e.stopPropagation(); // Prevent background drag from firing
       e.preventDefault();
-      const boardRect = this.elements.vttBoard.getBoundingClientRect();
       let startX = e.clientX;
       let startY = e.clientY;
 
       const onMouseMove = (moveEvent) => {
         const dx = moveEvent.clientX - startX;
         const dy = moveEvent.clientY - startY;
-        const newLeft = Math.max(0, Math.min(boardRect.width - tokenEl.offsetWidth, tokenEl.offsetLeft + dx));
-        const newTop = Math.max(0, Math.min(boardRect.height - tokenEl.offsetHeight, tokenEl.offsetTop + dy));
+
+        const boardWidth = this.elements.vttBoard.offsetWidth;
+        const boardHeight = this.elements.vttBoard.offsetHeight;
+
+        // Calculate the token's new desired absolute position relative to the board
+        const newAbsoluteX = layerEl.offsetLeft + tokenEl.offsetLeft + dx;
+        const newAbsoluteY = layerEl.offsetTop + tokenEl.offsetTop + dy;
+
+        // Clamp the absolute position to the board's boundaries
+        const clampedAbsoluteX = Math.max(0, Math.min(boardWidth - tokenEl.offsetWidth, newAbsoluteX));
+        const clampedAbsoluteY = Math.max(0, Math.min(boardHeight - tokenEl.offsetHeight, newAbsoluteY));
+
+        // Convert the clamped absolute position back to a position relative to the layer
+        const newLeft = clampedAbsoluteX - layerEl.offsetLeft;
+        const newTop = clampedAbsoluteY - layerEl.offsetTop;
+
         tokenEl.style.left = `${newLeft}px`;
         tokenEl.style.top = `${newTop}px`;
         startX = moveEvent.clientX;
@@ -165,6 +294,57 @@ export class BoardManager {
   }
 
   /** @private */
+  _toggleBackgroundEditMode(layerId) {
+    const currentState = this.backgroundEditStates.get(layerId) || false;
+    this.backgroundEditStates.set(layerId, !currentState);
+    this.renderLayerControls();
+    this.renderVtt();
+  }
+
+  /**
+   * Adds drag-and-drop functionality to a layer background.
+   * @private
+   */
+  _makeBackgroundDraggable(layerEl, layer) {
+    layerEl.addEventListener('mousedown', (e) => {
+        // Prevent token drag from firing on the same click
+        e.stopPropagation();
+        e.preventDefault();
+
+        let startX = e.clientX;
+        let startY = e.clientY;
+
+        const onMouseMove = (moveEvent) => {
+            const dx = moveEvent.clientX - startX;
+            const dy = moveEvent.clientY - startY;
+            const newLeft = layerEl.offsetLeft + dx;
+            const newTop = layerEl.offsetTop + dy;
+            layerEl.style.left = `${newLeft}px`;
+            layerEl.style.top = `${newTop}px`;
+            startX = moveEvent.clientX;
+            startY = moveEvent.clientY;
+        };
+
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+
+            const newX = layerEl.offsetLeft;
+            const newY = layerEl.offsetTop;
+
+            if (layer.background) {
+                layer.background.x = newX;
+                layer.background.y = newY;
+                this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+            }
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    });
+  }
+
+  /** @private */
   addNewLayer() {
     const layerName = prompt('Enter a name for the new layer:', `Layer ${this.session.vtt.layers.length + 1}`);
     if (!layerName || layerName.trim() === '') return;
@@ -173,12 +353,69 @@ export class BoardManager {
       id: `layer_${Math.random().toString(36).substring(2, 9)}`,
       name: layerName,
       visibleToPlayers: true,
-      backgroundImage: null,
+      background: null,
       tokens: [],
     };
     this.session.vtt.layers.push(newLayer);
     this.renderLayerControls();
+    this.renderVtt(); // Re-render the VTT to show the new empty layer for the GM.
     this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+  }
+
+  /** @private */
+  _addNpcToken(layerId) {
+    const layer = this.session.vtt.layers.find(l => l.id === layerId);
+    if (!layer) return;
+
+    const npcName = prompt('Enter a name for the NPC token:', 'Goblin');
+    if (!npcName || npcName.trim() === '') return;
+
+    const newNpcToken = {
+      id: `token_${Math.random().toString(36).substring(2, 9)}`,
+      peerId: null, // This marks it as an NPC
+      name: npcName,
+      x: 50,
+      y: 50,
+      color: `#${Math.floor(Math.random()*16777215).toString(16).padStart(6, '0')}`
+    };
+
+    layer.tokens.push(newNpcToken);
+    this.renderVtt();
+    this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+  }
+
+  /** @private */
+  _deleteToken(layerId, tokenId) {
+    const layer = this.session.vtt.layers.find(l => l.id === layerId);
+    if (!layer) return;
+
+    // Also works for player tokens, giving GM full control.
+    layer.tokens = layer.tokens.filter(token => token.id !== tokenId);
+    this.renderVtt();
+    this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+  }
+
+  /** @private */
+  clearLayerBackground(layerId) {
+    const layer = this.session.vtt.layers.find(l => l.id === layerId);
+    if (layer && layer.background) {
+      layer.background = null;
+      this.renderVtt();
+      this.renderLayerControls(); // Re-render controls to hide the button
+      this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+    }
+  }
+
+  /** @private */
+  _scaleLayerBackground(layerId, factor) {
+    const layer = this.session.vtt.layers.find(l => l.id === layerId);
+    if (layer && layer.background) {
+      layer.background.scale *= factor;
+      // Clamp scale to a minimum reasonable value
+      layer.background.scale = Math.max(0.05, layer.background.scale);
+      this.renderVtt();
+      this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+    }
   }
 
   /** @private */
@@ -187,6 +424,7 @@ export class BoardManager {
     if (layer) {
       layer.visibleToPlayers = !layer.visibleToPlayers;
       this.renderLayerControls();
+      this.renderVtt(); // Re-render for the GM to apply opacity change.
       this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
     }
   }
@@ -198,9 +436,23 @@ export class BoardManager {
 
     const reader = new FileReader();
     reader.onload = (e) => {
-      layer.backgroundImage = e.target.result;
-      this.renderVtt();
-      this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+      const imageUrl = e.target.result;
+      const image = new Image();
+      image.onload = () => {
+        // Now we have the dimensions
+        layer.background = {
+          url: imageUrl,
+          width: image.naturalWidth,
+          height: image.naturalHeight,
+          scale: 1,
+          x: layer.background?.x || 0, // Preserve position if replacing background
+          y: layer.background?.y || 0,
+        };
+        this.renderVtt();
+        this.renderLayerControls(); // Re-render controls to show the clear button
+        this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+      };
+      image.src = imageUrl;
     };
     reader.readAsDataURL(file);
   }
