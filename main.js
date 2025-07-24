@@ -193,11 +193,23 @@ function updateDistanceBasedAudio() {
         if (peerToken) {
             // This peer has a claimed token, so calculate distance-based volume.
             const distance = Math.hypot(myToken.x - peerToken.x, myToken.y - peerToken.y);
-            const maxAudibleDistance = 1200; // This can be tuned for best effect.
+            
+            // --- Inverse Square Law Calculation ---
+            const minDistance = 40; // At this distance or closer, volume is max.
+            const maxDistance = 1200; // At this distance or further, volume is min.
             const minVolume = 0.05;
+            let volumeRatio = 0;
 
-            const clampedDistance = Math.min(distance, maxAudibleDistance);
-            const volumeRatio = 1 - (clampedDistance / maxAudibleDistance); // 1 (close) to 0 (far)
+            if (distance <= minDistance) {
+                volumeRatio = 1;
+            } else if (distance < maxDistance) {
+                // Use a normalized inverse square falloff.
+                const invSqrDist = 1 / (distance * distance);
+                const invSqrMin = 1 / (minDistance * minDistance);
+                const invSqrMax = 1 / (maxDistance * maxDistance);
+                volumeRatio = (invSqrDist - invSqrMax) / (invSqrMin - invSqrMax);
+            }
+            // If distance >= maxDistance, volumeRatio remains 0.
 
             // Interpolate between the minimum and the user-set maximum volume.
             const finalVolume = minVolume + (maxVolume - minVolume) * volumeRatio;

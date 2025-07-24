@@ -300,7 +300,7 @@ export class BoardManager {
         startY = moveEvent.clientY;
       };
 
-      const onMouseUp = () => {
+      const onMouseUp = (e) => {
         document.removeEventListener('mousemove', onMouseMove);
         document.removeEventListener('mouseup', onMouseUp);
 
@@ -308,17 +308,19 @@ export class BoardManager {
         const newY = tokenEl.offsetTop;
         const tokenId = tokenEl.dataset.tokenId;
 
-        const layer = this.session.vtt.layers.find(l => l.id === layerId);
-        const token = layer?.tokens.find(t => t.id === tokenId);
-        if (token) {
-          token.x = newX;
-          token.y = newY;
-        }
-
-        if (this.session.role === 'gm') {
+        if (this.session.role === 'gm' && e.button != 2) {
+          // GM is authoritative, so update local state and broadcast.
+          const layer = this.session.vtt.layers.find(l => l.id === layerId);
+          const token = layer?.tokens.find(t => t.id === tokenId);
+          if (token) {
+            token.x = newX;
+            token.y = newY;
+          }
           this.callbacks.broadcastMessage({ type: 'token-moved', layerId, tokenId, x: newX, y: newY });
           this.callbacks.updateDistanceBasedAudio();
         } else {
+          // Player just sends request. Does not modify local session state.
+          // The visual element is already moved optimistically.
           this.callbacks.sendTokenMoveRequest(layerId, tokenId, newX, newY);
         }
       };
@@ -417,7 +419,7 @@ export class BoardManager {
 
     layer.tokens.push(newNpcToken);
     this.renderVtt();
-    this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+    this.callbacks.broadcastMessage({ type: 'token-added', layerId, tokenData: newNpcToken });
   }
 
   /** @private */
@@ -434,7 +436,7 @@ export class BoardManager {
         if (!isNaN(newScale) && newScale > 0) {
             token.scale = newScale;
             this.renderVtt();
-            this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+            this.callbacks.broadcastMessage({ type: 'token-property-changed', layerId, tokenId, properties: { scale: newScale } });
         } else {
             alert("Invalid size. Please enter a positive number.");
         }
@@ -444,11 +446,13 @@ export class BoardManager {
   /** @private */
   _claimToken(layerId, tokenId) {
     if (this.session.role === 'gm') {
+        const changes = [];
         // First, unclaim any other token this user currently owns
         this.session.vtt.layers.forEach(l => {
             l.tokens.forEach(t => {
                 if (t.peerId === this.session.myId) {
                     t.peerId = null;
+                    changes.push({ layerId: l.id, tokenId: t.id, newOwner: null });
                 }
             });
         });
@@ -458,11 +462,12 @@ export class BoardManager {
         const token = layer?.tokens.find(t => t.id === tokenId);
         if (token) {
             token.peerId = this.session.myId;
+            changes.push({ layerId: layer.id, tokenId: token.id, newOwner: this.session.myId });
         }
 
         this.renderVtt();
         this.callbacks.updateDistanceBasedAudio();
-        this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+        this.callbacks.broadcastMessage({ type: 'token-ownership-changed', changes });
     } else {
         // Player sends a request to the GM
         this.callbacks.sendClaimTokenRequest(layerId, tokenId);
@@ -478,7 +483,8 @@ export class BoardManager {
             token.peerId = null;
             this.renderVtt();
             this.callbacks.updateDistanceBasedAudio();
-            this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+            const changes = [{ layerId: layer.id, tokenId: token.id, newOwner: null }];
+            this.callbacks.broadcastMessage({ type: 'token-ownership-changed', changes });
         }
     } else {
         this.callbacks.sendUnclaimTokenRequest(layerId, tokenId);
@@ -493,7 +499,7 @@ export class BoardManager {
     // Also works for player tokens, giving GM full control.
     layer.tokens = layer.tokens.filter(token => token.id !== tokenId);
     this.renderVtt();
-    this.callbacks.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+    this.callbacks.broadcastMessage({ type: 'token-deleted', layerId, tokenId });
   }
 
   /** @private */

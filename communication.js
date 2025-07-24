@@ -203,6 +203,7 @@ export class CommunicationManager {
           playerLayer.tokens.push(newPlayerToken);
           this.ui.renderVtt();
           this.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+          //this.broadcastMessage({ type: 'token-added', layerId: playerLayer.id, tokenData: newPlayerToken });
         }
 
         if (offers.length > 0) {
@@ -230,21 +231,29 @@ export class CommunicationManager {
 
         if (this.session.role === 'gm') {
           this.session.p2pOffers.delete(peerId);
-          // Unclaim or remove tokens associated with the disconnected player
-          this.session.vtt.layers.forEach(layer => {
-              // Find the token that was created specifically for this player and remove it
-              const playerTokenIndex = layer.tokens.findIndex(token => token.id === `token_${peerId}`);
-              if (playerTokenIndex > -1) {
-                  layer.tokens.splice(playerTokenIndex, 1);
+
+          const changes = {
+            removedTokenId: `token_${peerId}`, // The ID of the player's original token
+            unclaimedTokens: [] // Other tokens the player might have controlled
+          };
+
+          // Find and mark for unclaiming any other tokens the player might have controlled
+          this.session.vtt.layers.forEach(l => {
+            l.tokens.forEach(t => {
+              if (t.peerId === peerId && t.id !== changes.removedTokenId) {
+                t.peerId = null;
+                changes.unclaimedTokens.push({ layerId: l.id, tokenId: t.id });
               }
-              // Find any other tokens this player might have claimed and unclaim them
-              layer.tokens.forEach(token => {
-                  if (token.peerId === peerId) {
-                      token.peerId = null;
-                  }
-              });
+            });
           });
-          this.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+
+          // Remove the player's original token from the state
+          this.session.vtt.layers.forEach(l => {
+            l.tokens = l.tokens.filter(t => t.id !== changes.removedTokenId);
+          });
+
+          // Broadcast a targeted update instead of the full game state
+          this.broadcastMessage({ type: 'player-disconnected-update', changes });
         }
         this.ui.updatePeerList();
         this.ui.renderVtt();
@@ -296,13 +305,49 @@ export class CommunicationManager {
         break;
       }
 
+      case 'token-deleted': {
+        const layer = this.session.vtt.layers.find(l => l.id === msg.layerId);
+        if (layer) {
+          layer.tokens = layer.tokens.filter(t => t.id !== msg.tokenId);
+          this.ui.renderVtt();
+          this.ui.updateDistanceBasedAudio();
+        }
+        break;
+      }
+
+      case 'token-added': {
+        const layer = this.session.vtt.layers.find(l => l.id === msg.layerId);
+        if (layer) {
+          // Avoid adding a duplicate if the message somehow gets echoed back
+          if (!layer.tokens.some(t => t.id === msg.tokenData.id)) {
+            layer.tokens.push(msg.tokenData);
+          }
+          this.ui.renderVtt();
+          this.ui.updateDistanceBasedAudio();
+        }
+        break;
+      }
+
+      case 'token-property-changed': {
+        const layer = this.session.vtt.layers.find(l => l.id === msg.layerId);
+        const token = layer?.tokens.find(t => t.id === msg.tokenId);
+        if (token && msg.properties) {
+          Object.assign(token, msg.properties);
+          this.ui.renderVtt();
+          this.ui.updateDistanceBasedAudio();
+        }
+        break;
+      }
+
       case 'claim-token-request':
         if (this.session.role === 'gm') {
+          const changes = [];
           // Unclaim any other token owned by the requesting player
           this.session.vtt.layers.forEach(l => {
               l.tokens.forEach(t => {
                   if (t.peerId === peerId) {
                       t.peerId = null;
+                      changes.push({ layerId: l.id, tokenId: t.id, newOwner: null });
                   }
               });
           });
@@ -311,10 +356,11 @@ export class CommunicationManager {
           const token = layer?.tokens.find(t => t.id === msg.tokenId);
           if (token) {
               token.peerId = peerId;
+              changes.push({ layerId: layer.id, tokenId: token.id, newOwner: peerId });
           }
           this.ui.renderVtt();
           this.ui.updateDistanceBasedAudio();
-          this.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+          this.broadcastMessage({ type: 'token-ownership-changed', changes });
         }
         break;
 
@@ -326,10 +372,43 @@ export class CommunicationManager {
                 token.peerId = null;
                 this.ui.renderVtt();
                 this.ui.updateDistanceBasedAudio();
-                this.broadcastMessage({ type: 'game-state-update', vtt: this.session.vtt });
+                const changes = [{ layerId: layer.id, tokenId: token.id, newOwner: null }];
+                this.broadcastMessage({ type: 'token-ownership-changed', changes });
             }
         }
         break;
+
+      case 'token-ownership-changed': {
+        msg.changes.forEach(change => {
+            const layer = this.session.vtt.layers.find(l => l.id === change.layerId);
+            const token = layer?.tokens.find(t => t.id === change.tokenId);
+            if (token) {
+                token.peerId = change.newOwner;
+            }
+        });
+        this.ui.renderVtt();
+        this.ui.updateDistanceBasedAudio();
+        break;
+      }
+
+      case 'player-disconnected-update': {
+        const { removedTokenId, unclaimedTokens } = msg.changes;
+        // Remove the disconnected player's original token
+        this.session.vtt.layers.forEach(l => {
+          l.tokens = l.tokens.filter(t => t.id !== removedTokenId);
+        });
+        // Unclaim any other tokens they were controlling
+        unclaimedTokens.forEach(change => {
+          const layer = this.session.vtt.layers.find(l => l.id === change.layerId);
+          const token = layer?.tokens.find(t => t.id === change.tokenId);
+          if (token) {
+            token.peerId = null;
+          }
+        });
+        this.ui.renderVtt();
+        this.ui.updateDistanceBasedAudio();
+        break;
+      }
 
       case 'p2p-offer':
         if (this.session.role === 'gm') {
