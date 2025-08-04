@@ -29,8 +29,9 @@ class BoardState {
 }
 
 class EventHandler {
-    constructor(boardState) {
+    constructor(boardState, onStateChange) {
         this.boardState = boardState;
+        this.onStateChange = onStateChange || (() => {});
     }
 
     handleEvent(event) {
@@ -85,7 +86,26 @@ class EventHandler {
                     durationMillis: event.durationMillis || 2000
                 });
                 break;
+            case 'layer-added':
+                this.boardState.layers.push(event.layer);
+                break;
+            case 'layer-deleted':
+                this.boardState.layers = this.boardState.layers.filter(l => l.id !== event.layerId);
+                break;
+            case 'layer-visibility-changed':
+                const layerToToggle = this.boardState.findLayer(event.layerId);
+                if (layerToToggle) {
+                    layerToToggle.visible = event.visible;
+                }
+                break;
+            case 'layer-renamed':
+                const layerToRename = this.boardState.findLayer(event.layerId);
+                if (layerToRename) {
+                    layerToRename.name = event.name;
+                }
+                break;
         }
+        this.onStateChange();
     }
 }
 
@@ -94,14 +114,22 @@ class Board {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
         this.boardState = boardState;
+        this.role = config.role || 'player';
         this.onTokenMoveRequested = config.onTokenMoveRequested || (() => {});
         this.onPingRequested = config.onPingRequested || (() => {});
+        this.onTokenSelected = config.onTokenSelected || (() => {});
+
         this.scale = 1;
         this.panX = 0;
         this.panY = 0;
         this.isPanning = false;
         this.draggedToken = null;
         this.draggedTokenLayerId = null;
+        this.draggedTokenOriginalPos = null;
+        this.selectedTokenId = null;
+        this.selectedTokenLayerId = null;
+        this.mouseDownPos = null;
+
         this.lastPanX = 0;
         this.lastPanY = 0;
         this.lastTouchX = 0;
@@ -187,15 +215,31 @@ class Board {
 
     drawTokens() {
         this.boardState.layers.forEach(layer => {
-            if (layer.visible) {
-                layer.tokens.forEach(token => {
-                    this.ctx.beginPath();
-                    this.ctx.arc(token.x, token.y, 20, 0, 2 * Math.PI);
-                    this.ctx.fillStyle = token.color;
-                    this.ctx.fill();
-                    this.ctx.stroke();
-                });
+            const isVisible = layer.visible || this.role === 'gm';
+            if (!isVisible) return;
+
+            const originalAlpha = this.ctx.globalAlpha;
+            if (!layer.visible && this.role === 'gm') {
+                this.ctx.globalAlpha = 0.5;
             }
+
+            layer.tokens.forEach(token => {
+                this.ctx.beginPath();
+                this.ctx.arc(token.x, token.y, 20, 0, 2 * Math.PI);
+                this.ctx.fillStyle = token.color;
+                this.ctx.fill();
+
+                if (token.id === this.selectedTokenId) {
+                    this.ctx.strokeStyle = 'yellow';
+                    this.ctx.lineWidth = 3 / this.scale;
+                } else {
+                    this.ctx.strokeStyle = 'black';
+                    this.ctx.lineWidth = 1 / this.scale;
+                }
+                this.ctx.stroke();
+            });
+
+            this.ctx.globalAlpha = originalAlpha;
         });
     }
 
@@ -222,15 +266,19 @@ class Board {
 
     onMouseDown(e) {
         const pos = this.getMousePos(e);
+        this.mouseDownPos = { x: e.clientX, y: e.clientY };
 
         for (const layer of [...this.boardState.layers].reverse()) {
-            if (!layer.visible) continue;
+            const isInteractable = layer.visible || this.role === 'gm';
+            if (!isInteractable) continue;
+
             for (const token of [...layer.tokens].reverse()) {
                 const dx = pos.x - token.x;
                 const dy = pos.y - token.y;
                 if (Math.sqrt(dx * dx + dy * dy) < 20) {
                     this.draggedToken = token;
                     this.draggedTokenLayerId = layer.id;
+                    this.draggedTokenOriginalPos = { x: token.x, y: token.y };
                     return;
                 }
             }
@@ -243,11 +291,30 @@ class Board {
 
     onMouseUp(e) {
         if (this.draggedToken) {
-            const pos = this.getMousePos(e);
-            this.onTokenMoveRequested(this.draggedTokenLayerId, this.draggedToken.id, pos.x, pos.y);
-            this.draggedToken = null;
-            this.draggedTokenLayerId = null;
+            const mouseUpPos = { x: e.clientX, y: e.clientY };
+            const moveDist = Math.sqrt(Math.pow(mouseUpPos.x - this.mouseDownPos.x, 2) + Math.pow(mouseUpPos.y - this.mouseDownPos.y, 2));
+
+            if (moveDist < 5) { // It's a click
+                this.draggedToken.x = this.draggedTokenOriginalPos.x;
+                this.draggedToken.y = this.draggedTokenOriginalPos.y;
+
+                if (this.selectedTokenId === this.draggedToken.id) {
+                    this.selectedTokenId = null;
+                    this.selectedTokenLayerId = null;
+                } else {
+                    this.selectedTokenId = this.draggedToken.id;
+                    this.selectedTokenLayerId = this.draggedTokenLayerId;
+                }
+                this.onTokenSelected(this.selectedTokenLayerId, this.selectedTokenId);
+            } else { // It's a drag
+                const pos = this.getMousePos(e);
+                this.onTokenMoveRequested(this.draggedTokenLayerId, this.draggedToken.id, pos.x, pos.y);
+            }
         }
+
+        this.draggedToken = null;
+        this.draggedTokenLayerId = null;
+        this.draggedTokenOriginalPos = null;
         this.isPanning = false;
     }
 
@@ -290,22 +357,28 @@ class Board {
 
     onTouchStart(e) {
         if (e.touches.length === 1) {
-            const pos = this.getMousePos(e.touches[0]);
+            const touch = e.touches[0];
+            const pos = this.getMousePos(touch);
+            this.mouseDownPos = { x: touch.clientX, y: touch.clientY };
+
             for (const layer of [...this.boardState.layers].reverse()) {
-                if (!layer.visible) continue;
+                const isInteractable = layer.visible || this.role === 'gm';
+                if (!isInteractable) continue;
+
                 for (const token of [...layer.tokens].reverse()) {
                     const dx = pos.x - token.x;
                     const dy = pos.y - token.y;
                     if (Math.sqrt(dx * dx + dy * dy) < 20) {
                         this.draggedToken = token;
                         this.draggedTokenLayerId = layer.id;
+                        this.draggedTokenOriginalPos = { x: token.x, y: token.y };
                         return;
                     }
                 }
             }
             this.isPanning = true;
-            this.lastTouchX = e.touches[0].clientX;
-            this.lastTouchY = e.touches[0].clientY;
+            this.lastTouchX = touch.clientX;
+            this.lastTouchY = touch.clientY;
         } else if (e.touches.length === 2) {
             this.isPanning = false;
             this.initialPinchDistance = Math.hypot(
@@ -318,16 +391,38 @@ class Board {
     onTouchEnd(e) {
         const currentTime = new Date().getTime();
         const tapLength = currentTime - this.lastTap;
-        if (tapLength < 300 && tapLength > 0) {
-            e.preventDefault();
-            this.onPingRequested(this.getMousePos(e.changedTouches[0]));
-            this.draggedToken = null; // Cancel drag on double tap
-        } else if (this.draggedToken) {
-            this.onTokenMoveRequested(this.draggedTokenLayerId, this.draggedToken.id, this.draggedToken.x, this.draggedToken.y);
-            this.draggedToken = null;
-            this.draggedTokenLayerId = null;
+
+        if (this.draggedToken) {
+            const touch = e.changedTouches[0];
+            const moveDist = Math.sqrt(Math.pow(touch.clientX - this.mouseDownPos.x, 2) + Math.pow(touch.clientY - this.mouseDownPos.y, 2));
+
+            if (moveDist < 10) { // It's a tap
+                this.draggedToken.x = this.draggedTokenOriginalPos.x;
+                this.draggedToken.y = this.draggedTokenOriginalPos.y;
+
+                if (tapLength < 300 && tapLength > 0) { // Double tap
+                    e.preventDefault();
+                    this.onPingRequested(this.getMousePos(touch));
+                    this.lastTap = 0;
+                } else { // Single tap
+                    if (this.selectedTokenId === this.draggedToken.id) {
+                        this.selectedTokenId = null;
+                        this.selectedTokenLayerId = null;
+                    } else {
+                        this.selectedTokenId = this.draggedToken.id;
+                        this.selectedTokenLayerId = this.draggedTokenLayerId;
+                    }
+                    this.onTokenSelected(this.selectedTokenLayerId, this.selectedTokenId);
+                    this.lastTap = currentTime;
+                }
+            } else { // It's a drag
+                this.onTokenMoveRequested(this.draggedTokenLayerId, this.draggedToken.id, this.draggedToken.x, this.draggedToken.y);
+            }
         }
-        this.lastTap = currentTime;
+
+        this.draggedToken = null;
+        this.draggedTokenLayerId = null;
+        this.draggedTokenOriginalPos = null;
         this.isPanning = false;
         this.initialPinchDistance = 0;
     }
@@ -362,3 +457,5 @@ class Board {
         }
     }
 }
+
+export { Board, BoardState, EventHandler };

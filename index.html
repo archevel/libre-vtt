@@ -33,10 +33,6 @@
       <aside id="side-panel">
         <div id="gm-layer-controls" style="display: none;">
             <h2>Layers</h2>
-            <div id="gm-token-scale-controls">
-                <label for="token-scale-slider">Token Size</label>
-                <input type="range" id="token-scale-slider" min="0.5" max="3" step="0.1" value="1">
-            </div>
             <ul id="layer-list"></ul>
             <div class="controls">
                 <button id="add-layer-btn">Add New Layer</button>
@@ -48,7 +44,7 @@
         </div>
       </aside>
       <main id="vtt-board-container">
-        <div id="vtt-board"></div>
+        <canvas id="board-canvas"></canvas>
       </main>
     </div>
 
@@ -99,7 +95,7 @@
 
     <script type="module" src="./webrtc.js"></script>
     <script type="module" src="./communication.js"></script>
-    <script type="module" src="./board.js"></script>
+    <script type="module" src="./board-interactive.js"></script>
     <script type="module" src="./main.js"></script>
   </body>
 </html>

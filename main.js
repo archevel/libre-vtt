@@ -1,5 +1,5 @@
 import { CommunicationManager } from './communication.js';
-import { BoardManager } from './board.js';
+import { Board, BoardState, EventHandler } from './board-interactive.js';
 
 // --- DOM Elements ---
 const sessionStatus = document.getElementById('session-status');
@@ -7,13 +7,12 @@ const hamburgerMenuBtn = document.getElementById('hamburger-menu-btn');
 const mainMenu = document.getElementById('main-menu');
 const myPeerIdEl = document.getElementById('my-peer-id');
 const peerList = document.getElementById('peer-list');
-const vttBoard = document.getElementById('vtt-board');
+const boardCanvas = document.getElementById('board-canvas');
 
 // GM Layer elements
 const gmLayerControls = document.getElementById('gm-layer-controls');
 const layerList = document.getElementById('layer-list');
 const addLayerBtn = document.getElementById('add-layer-btn');
-const tokenScaleSlider = document.getElementById('token-scale-slider');
 
 // GM Dialog elements
 const gmMainControls = document.getElementById('gm-main-controls');
@@ -39,7 +38,9 @@ const savedStatesList = document.getElementById('saved-states-list');
 
 // --- App Modules ---
 let communicationManager;
-let boardManager;
+let board;
+let boardState;
+let eventHandler;
 
 // --- State Management ---
 const session = {
@@ -57,13 +58,12 @@ const session = {
       {
         id: `layer_${Math.random().toString(36).substring(2, 9)}`,
         name: 'Player Layer',
-        visibleToPlayers: true,
-        background: null, // { url, width, height, scale }
+        visible: true,
         tokens: [],
       }
     ],
-    tokenScale: 1,
-  }
+  },
+  eventHandler: null, // Will be initialized later
 };
 
 myPeerIdEl.textContent = session.myId;
@@ -72,8 +72,7 @@ myPeerIdEl.textContent = session.myId;
 const ui = {
   updateStatus,
   updatePeerList,
-  renderVtt: () => boardManager?.renderVtt(),
-  renderLayerControls: () => boardManager?.renderLayerControls(),
+  renderLayerControls,
   updateDistanceBasedAudio,
   openModal,
   elements: {
@@ -88,6 +87,10 @@ const ui = {
 /** Determines role based on URL and initializes the application. */
 async function initialize() {
   communicationManager = new CommunicationManager(session, ui);
+
+  boardState = new BoardState();
+  eventHandler = new EventHandler(boardState, renderLayerControls);
+  session.eventHandler = eventHandler;
 
   if (window.location.hash) {
     // Player role: An invite hash is present.
@@ -111,28 +114,38 @@ async function initialize() {
     session.role = 'gm';
     gmMainControls.style.display = 'block';
     gmLayerControls.style.display = 'block';
-    updateStatus('GM mode. Create an invite to start.');
+    eventHandler.handleEvent({ type: 'game-state-update', vtt: session.vtt });
   }
   updatePeerList();
-  
-  const boardManagerCallbacks = {
-    broadcastMessage,
-    sendTokenMoveRequest: (...args) => communicationManager.sendTokenMoveRequest(...args),
-    sendClaimTokenRequest: (...args) => communicationManager.sendClaimTokenRequest(...args),
-    sendUnclaimTokenRequest: (...args) => communicationManager.sendUnclaimTokenRequest(...args),
-    updateDistanceBasedAudio,
-  };
-  
-  const boardManagerElements = {
-    vttBoard,
-    layerList,
-    addLayerBtn,
-    tokenScaleSlider,
-  };
-  boardManager = new BoardManager(session, boardManagerCallbacks, boardManagerElements);
-  boardManager.initializeEventListeners();
-  boardManager.renderLayerControls();
-  boardManager.renderVtt();
+
+  board = new Board(boardCanvas, boardState, {
+      role: session.role,
+      onTokenMoveRequested: (layerId, tokenId, x, y) => {
+          communicationManager.broadcastMessage({
+              type: 'token-moved',
+              layerId,
+              tokenId,
+              x,
+              y
+          });
+      },
+      onPingRequested: (pos) => {
+          communicationManager.broadcastMessage({
+              type: 'ping',
+              x: pos.x,
+              y: pos.y,
+              durationMillis: 3000
+          });
+      },
+      onTokenSelected: (layerId, tokenId) => {
+          // TODO: Implement token properties UI
+          if (tokenId) {
+              console.log(`Token ${tokenId} on layer ${layerId} selected`);
+          } else {
+              console.log('Token deselected');
+          }
+      }
+  });
 }
 
 /** Updates the status message in the UI. */
@@ -147,7 +160,6 @@ function updateStatus(message) {
  */
 function toggleMainMenu(forceState) {
     const isVisible = mainMenu.classList.contains('main-menu-visible');
-    // If forceState is a boolean, use it. Otherwise, toggle the current state.
     const show = typeof forceState === 'boolean' ? forceState : !isVisible;
 
     if (show) {
@@ -171,51 +183,107 @@ function closeModal(modalElement) {
   modalElement.style.display = 'none';
 }
 
+/** Renders the layer controls UI based on the current board state. */
+function renderLayerControls() {
+    if (session.role !== 'gm') return;
+
+    layerList.innerHTML = '';
+
+    boardState.layers.forEach(layer => {
+        const li = document.createElement('li');
+        li.className = 'layer-item';
+        li.dataset.layerId = layer.id;
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'peer-id-text';
+        nameSpan.textContent = layer.name;
+        nameSpan.addEventListener('dblclick', () => {
+            const newName = prompt('Enter new layer name:', layer.name);
+            if (newName && newName.trim() !== '') {
+                broadcastMessage({ type: 'layer-renamed', layerId: layer.id, name: newName });
+            }
+        });
+
+        const controlsDiv = document.createElement('div');
+        controlsDiv.className = 'layer-item-controls';
+
+        const visibilityBtn = document.createElement('button');
+        visibilityBtn.textContent = layer.visible ? 'Visible' : 'Hidden';
+        visibilityBtn.title = layer.visible ? 'Visible to players' : 'Hidden from players';
+        visibilityBtn.onclick = () => {
+            broadcastMessage({ type: 'layer-visibility-changed', layerId: layer.id, visible: !layer.visible });
+        };
+
+        const addNpcBtn = document.createElement('button');
+        addNpcBtn.textContent = 'NPC+';
+        addNpcBtn.title = 'Add NPC Token';
+        addNpcBtn.onclick = () => {
+            const npcToken = {
+                id: `token_${Math.random().toString(36).substring(2, 9)}`,
+                x: 100,
+                y: 100,
+                color: 'purple',
+                peerId: null
+            };
+            broadcastMessage({ type: 'token-added', layerId: layer.id, tokenData: npcToken });
+        };
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.textContent = 'X';
+        deleteBtn.title = 'Delete Layer';
+        deleteBtn.onclick = () => {
+            if (confirm(`Are you sure you want to delete the layer "${layer.name}"?`)) {
+                broadcastMessage({ type: 'layer-deleted', layerId: layer.id });
+            }
+        };
+
+        controlsDiv.appendChild(visibilityBtn);
+        controlsDiv.appendChild(addNpcBtn);
+        controlsDiv.appendChild(deleteBtn);
+
+        li.appendChild(nameSpan);
+        li.appendChild(controlsDiv);
+        layerList.appendChild(li);
+    });
+}
+
 /**
  * Updates peer audio volumes based on the distance between claimed tokens.
  */
 function updateDistanceBasedAudio() {
     const myToken = findMyToken();
     if (!myToken) {
-        // If I don't have a claimed token, reset all volumes to their manual settings.
         for (const [peerId, audioEl] of session.peerAudioElements.entries()) {
             audioEl.volume = session.peerVolumes.get(peerId) ?? 1;
         }
         return;
     }
 
-    const allTokens = session.vtt.layers.flatMap(l => l.tokens);
+    const allTokens = boardState.layers.flatMap(l => l.tokens);
 
     for (const [peerId, audioEl] of session.peerAudioElements.entries()) {
         const peerToken = allTokens.find(t => t.peerId === peerId);
         const maxVolume = session.peerVolumes.get(peerId) ?? 1;
 
         if (peerToken) {
-            // This peer has a claimed token, so calculate distance-based volume.
             const distance = Math.hypot(myToken.x - peerToken.x, myToken.y - peerToken.y);
-            
-            // --- Inverse Square Law Calculation ---
-            const minDistance = 40; // At this distance or closer, volume is max.
-            const maxDistance = 1200; // At this distance or further, volume is min.
+            const minDistance = 40;
+            const maxDistance = 1200;
             const minVolume = 0.05;
             let volumeRatio = 0;
 
             if (distance <= minDistance) {
                 volumeRatio = 1;
             } else if (distance < maxDistance) {
-                // Use a normalized inverse square falloff.
                 const invSqrDist = 1 / (distance * distance);
                 const invSqrMin = 1 / (minDistance * minDistance);
                 const invSqrMax = 1 / (maxDistance * maxDistance);
                 volumeRatio = (invSqrDist - invSqrMax) / (invSqrMin - invSqrMax);
             }
-            // If distance >= maxDistance, volumeRatio remains 0.
 
-            // Interpolate between the minimum and the user-set maximum volume.
             const finalVolume = minVolume + (maxVolume - minVolume) * volumeRatio;
             audioEl.volume = finalVolume;
         } else {
-            // This peer does not have a claimed token, so use the manual volume setting.
             audioEl.volume = maxVolume;
         }
     }
@@ -226,7 +294,7 @@ function updateDistanceBasedAudio() {
  * @returns {object|null} The token object or null if not found.
  */
 function findMyToken() {
-    return session.vtt.layers
+    return boardState.layers
         .flatMap(l => l.tokens)
         .find(t => t.peerId === session.myId);
 }
@@ -238,7 +306,6 @@ function updatePeerList() {
     peerList.innerHTML = '<li>No peers connected.</li>';
     return;
   }
-  // Sort peers to keep GM at the top if present, then alphabetically
   const sortedPeers = Array.from(session.peers.keys()).sort((a, b) => {
     if (a === session.gmId) return -1;
     if (b === session.gmId) return 1;
@@ -247,7 +314,6 @@ function updatePeerList() {
 
   for (const peerId of sortedPeers) {
     const li = document.createElement('li');
-
     const peerIdText = document.createElement('span');
     peerIdText.className = 'peer-id-text';
     peerIdText.textContent = peerId === session.gmId ? `${peerId} (GM)` : peerId;
@@ -271,11 +337,11 @@ function updatePeerList() {
       volumeSlider.min = 0;
       volumeSlider.max = 1;
       volumeSlider.step = 0.05;
-      volumeSlider.value = session.peerVolumes.get(peerId) ?? 1; // Use stored volume or default to 1
+      volumeSlider.value = session.peerVolumes.get(peerId) ?? 1;
       volumeSlider.className = 'volume-slider';
       volumeSlider.oninput = () => {
         session.peerVolumes.set(peerId, parseFloat(volumeSlider.value));
-        updateDistanceBasedAudio(); // Recalculate all volumes based on the new max value
+        updateDistanceBasedAudio();
       };
 
       controlsContainer.appendChild(muteBtn);
@@ -292,18 +358,11 @@ function broadcastMessage(message) {
   communicationManager.broadcastMessage(message);
 }
 
-/**
- * GM: Creates an offer for a new player and generates an invite payload.
- * This payload is then manually shared by the GM.
- */
 async function createInvite() {
   await communicationManager.createInvite();
   copyInviteLink();
 }
 
-/**
- * Copies the generated invite link from the text area to the clipboard.
- */
 function copyInviteLink() {
   const link = gmSignalingData.value;
   if (!link.startsWith('http')) {
@@ -318,9 +377,6 @@ function copyInviteLink() {
   });
 }
 
-/**
- * GM: Processes a player's answer pasted into the dialog.
- */
 async function processGmInput() {
   const data = gmSignalingData.value;
   if (!data) return;
@@ -328,9 +384,9 @@ async function processGmInput() {
   try {
     const payload = JSON.parse(atob(data));
     if (payload.type === 'answer') {
-      gmSignalingData.value = ''; // Clear after processing
+      gmSignalingData.value = '';
       await communicationManager.processAnswer(payload);
-      closeModal(gmInviteDialog); // Close dialog on success
+      closeModal(gmInviteDialog);
     } else {
       throw new Error(`Invalid payload type "${payload.type}" for GM input.`);
     }
@@ -340,9 +396,6 @@ async function processGmInput() {
   }
 }
 
-/**
- * GM: Prompts for a name and saves the current VTT state to localStorage.
- */
 function saveBoardState() {
   if (session.role !== 'gm') return;
 
@@ -353,19 +406,17 @@ function saveBoardState() {
   }
 
   try {
-    const boardState = JSON.stringify(session.vtt);
-    localStorage.setItem(`vtt-save-${saveName.trim()}`, boardState);
+    const boardStateToSave = { layers: boardState.layers };
+    const boardStateJSON = JSON.stringify(boardStateToSave);
+    localStorage.setItem(`vtt-save-${saveName.trim()}`, boardStateJSON);
     updateStatus(`Board state "${saveName.trim()}" saved successfully.`);
-    toggleMainMenu(false); // Close the menu after saving
+    toggleMainMenu(false);
   } catch (err) {
     console.error("Failed to save board state:", err);
     updateStatus("Error: Could not save board state. See console for details.");
   }
 }
 
-/**
- * GM: Exports the current VTT state to a JSON file for download.
- */
 function exportBoardState() {
   if (session.role !== 'gm') return;
 
@@ -377,8 +428,9 @@ function exportBoardState() {
   }
 
   try {
-    const boardState = JSON.stringify(session.vtt, null, 2); // Pretty-print JSON
-    const blob = new Blob([boardState], { type: 'application/json' });
+    const boardStateToSave = { layers: boardState.layers };
+    const boardStateJSON = JSON.stringify(boardStateToSave, null, 2);
+    const blob = new Blob([boardStateJSON], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
 
     const a = document.createElement('a');
@@ -397,10 +449,6 @@ function exportBoardState() {
   }
 }
 
-/**
- * GM: Imports a VTT state from a user-selected JSON file.
- * @param {Event} event The file input change event.
- */
 function importBoardState(event) {
   if (session.role !== 'gm' || !event.target.files.length) return;
   const file = event.target.files[0];
@@ -408,26 +456,22 @@ function importBoardState(event) {
   reader.onload = (e) => {
     try {
       const importedState = JSON.parse(e.target.result);
-      // Basic validation
       if (!importedState || !Array.isArray(importedState.layers)) throw new Error("Invalid board state format.");
       loadBoardState(importedState, `file "${file.name}"`);
     } catch (err) {
       updateStatus(`Error importing "${file.name}": Invalid JSON or format.`);
       console.error("Import failed:", err);
     } finally {
-      event.target.value = ''; // Reset input to allow re-importing same file
+      event.target.value = '';
     }
   };
   reader.readAsText(file);
 }
 
-/**
- * GM: Populates and displays the dialog for loading a saved board state.
- */
 function showLoadDialog() {
     if (session.role !== 'gm') return;
 
-    savedStatesList.innerHTML = ''; // Clear previous list
+    savedStatesList.innerHTML = '';
     let hasSaves = false;
 
     for (let i = 0; i < localStorage.length; i++) {
@@ -459,7 +503,7 @@ function showLoadDialog() {
                 e.stopPropagation();
                 if (confirm(`Are you sure you want to delete the save "${saveName}"?`)) {
                     localStorage.removeItem(key);
-                    showLoadDialog(); // Refresh the list
+                    showLoadDialog();
                 }
             };
             controlsDiv.appendChild(deleteBtn);
@@ -476,21 +520,13 @@ function showLoadDialog() {
     openModal(loadBoardDialog);
 }
 
-/**
- * GM: Loads a new board state object into the session and updates the UI.
- * @param {object} newState The VTT state object to load.
- * @param {string} sourceDescription A description of where the state came from (e.g., save name or filename).
- */
 function loadBoardState(newState, sourceDescription) {
     if (!newState) {
         updateStatus(`Error: Could not load board state from ${sourceDescription}.`);
         return;
     }
 
-    session.vtt = newState;
-    boardManager.renderVtt();
-    boardManager.renderLayerControls();
-    broadcastMessage({ type: 'game-state-update', vtt: session.vtt });
+    broadcastMessage({ type: 'game-state-update', vtt: newState });
     updateStatus(`Board state from ${sourceDescription} loaded successfully.`);
     closeModal(loadBoardDialog);
     toggleMainMenu(false);
@@ -500,19 +536,30 @@ function loadBoardState(newState, sourceDescription) {
 window.addEventListener('DOMContentLoaded', () => initialize());
 
 hamburgerMenuBtn.addEventListener('click', (e) => {
-    // Prevent this click from bubbling up to the document listener
     e.stopPropagation();
     toggleMainMenu();
 });
 
-// Close menu if clicking outside of it
 document.addEventListener('click', (e) => {
-    // The menu button's click handler stops propagation, so this won't fire for the button.
-    // We only need to check if the click was outside the menu itself when it's open.
     if (mainMenu.classList.contains('main-menu-visible') && !mainMenu.contains(e.target)) {
-        toggleMainMenu(false); // Force close
+        toggleMainMenu(false);
     }
 });
+
+addLayerBtn.addEventListener('click', () => {
+    if (session.role !== 'gm') return;
+    const name = prompt('Enter a name for the new layer:');
+    if (name && name.trim() !== '') {
+        const newLayer = {
+            id: `layer_${Math.random().toString(36).substring(2, 9)}`,
+            name: name.trim(),
+            visible: true,
+            tokens: [],
+        };
+        broadcastMessage({ type: 'layer-added', layer: newLayer });
+    }
+});
+
 
 // GM Dialog Listeners
 openInviteDialogBtn.addEventListener('click', (e) => {

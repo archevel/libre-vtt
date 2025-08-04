@@ -3,6 +3,7 @@ const boardState = new BoardState();
 const eventHandler = new EventHandler(boardState);
 
 const board = new Board(canvas, boardState, {
+    role: 'gm',
     onTokenMoveRequested: (layerId, tokenId, x, y) => {
         eventHandler.handleEvent({
             type: 'token-moved',
@@ -19,6 +20,13 @@ const board = new Board(canvas, boardState, {
             y: pos.y,
             durationMillis: 3000
         });
+    },
+    onTokenSelected: (layerId, tokenId) => {
+        if (tokenId) {
+            console.log(`Token ${tokenId} on layer ${layerId} selected`);
+        } else {
+            console.log('Token deselected');
+        }
     }
 });
 
