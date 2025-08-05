@@ -26,7 +26,43 @@ export class CommunicationManager {
     const rtcManager = new WebRTCManager(inviteId);
     this.session.peers.set(inviteId, rtcManager); // Temporarily store by inviteId
 
-    const iceGatheringPromise = new Promise(resolve => rtcManager.peerConnection.onicecandidate = e => e.candidate === null && resolve());
+    const goodCandidatePromise = new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+            console.warn(`[${rtcManager.id}] ICE gathering timed out. Proceeding with available candidates.`);
+            if (rtcManager.peerConnection) {
+                rtcManager.peerConnection.onicecandidate = null;
+            }
+            resolve();
+        }, 5000); // 5-second timeout
+
+        if (rtcManager.peerConnection) {
+            rtcManager.peerConnection.onicecandidate = (e) => {
+                if (e.candidate) {
+                    console.log(`[${rtcManager.id}] Gathered ICE candidate: ${e.candidate.candidate}`);
+                    // A "good" candidate is a `srflx`, `prflx`, or `relay` type.
+                    if ((/ typ (srflx|relay|prflx)/).test(e.candidate.candidate)) {
+                        console.log(`[${rtcManager.id}] Found a good, non-host candidate.`);
+                        clearTimeout(timeout);
+                        if (rtcManager.peerConnection) {
+                            rtcManager.peerConnection.onicecandidate = null;
+                        }
+                        resolve();
+                    }
+                } else {
+                    // ICE gathering is complete.
+                    console.log(`[${rtcManager.id}] ICE gathering complete.`);
+                    clearTimeout(timeout);
+                    if (rtcManager.peerConnection) {
+                        rtcManager.peerConnection.onicecandidate = null;
+                    }
+                    resolve();
+                }
+            };
+        } else {
+            console.warn(`[${rtcManager.id}] Peer connection not available for ICE gathering.`);
+            resolve(); // Resolve immediately if peer connection is not available
+        }
+    });
 
     try {
       if (!this.session.localStream) {
@@ -36,7 +72,7 @@ export class CommunicationManager {
 
       rtcManager.setupDataChannel(); // GM creates the data channel
       await rtcManager.createOffer();
-      await iceGatheringPromise;
+      await goodCandidatePromise; // Wait for a good candidate or timeout
 
       const offer = rtcManager.peerConnection.localDescription;
       const payload = { type: 'invite', inviteId, offer, from: this.session.myId };
@@ -45,7 +81,13 @@ export class CommunicationManager {
 
       this.ui.elements.gmSignalingData.value = inviteLink;
       this.ui.elements.copyInviteBtn.style.display = 'inline-block';
-      this.ui.updateStatus(`Invite link created. Copy the link and send it to a player.`);
+
+      const hasGoodCandidate = offer && /a=candidate:.*typ\s+(srflx|relay|prflx)/.test(offer.sdp);
+      if (!hasGoodCandidate && offer && /a=candidate:/.test(offer.sdp)) {
+          this.ui.updateStatus('Warning: No public IP found. Invite may only work on LAN.');
+      } else {
+        this.ui.updateStatus(`Invite link created. Copy the link and send it to a player.`);
+      }
     } catch (err) {
       console.error('Error creating invite:', err);
       this.ui.updateStatus('Error creating invite. Check console.');
@@ -129,9 +171,7 @@ export class CommunicationManager {
       peer.send(message);
     }
     // Also process the message locally for the sender
-    if (this.session.role === 'gm') {
-        this.session.eventHandler.handleEvent(message);
-    }
+    this.session.eventHandler.handleEvent(message);
   }
 
   /**
@@ -194,26 +234,27 @@ export class CommunicationManager {
     };
 
     rtcManager.ondatachannelopen = () => {
-      this.ui.updateStatus(`Data channel with ${peerId} is open.`);
+        this.ui.updateStatus(`Data channel with ${peerId} is open.`);
 
-      if (this.session.role === 'gm' && peerId !== this.session.gmId) {
-        // 1. Send existing peer offers to the new player
-        const offers = Array.from(this.session.p2pOffers.entries());
+        if (this.session.role === 'gm' && peerId !== this.session.gmId) {
+            // Create a token for the new player and add it to the local state first.
+            const playerLayer = this.session.eventHandler.boardState.findLayer(l => l.name === 'Player Layer');
+            if (playerLayer) {
+                const newPlayerToken = { id: `token_${peerId}`, peerId, x: 50, y: 50, color: `#${Math.floor(Math.random()*16777215).toString(16).padStart(6, '0')}` };
+                this.session.eventHandler.handleEvent({ type: 'token-added', layerId: playerLayer.id, tokenData: newPlayerToken });
+            }
 
-        // Create a token for the new player
-        const playerLayer = this.session.vtt.layers.find(l => l.name === 'Player Layer');
-        if (playerLayer) {
-          const newPlayerToken = { id: `token_${peerId}`, peerId, x: 50, y: 50, color: `#${Math.floor(Math.random()*16777215).toString(16).padStart(6, '0')}`, scale: 1 };
-          this.broadcastMessage({ type: 'token-added', layerId: playerLayer.id, tokenData: newPlayerToken });
+            // Now, broadcast the entire, updated game state to everyone.
+            // This ensures the new player gets the full picture, and existing players see the new token.
+            this.broadcastMessage({ type: 'game-state-update', vtt: { layers: this.session.eventHandler.boardState.layers } });
+
+            // Then, handle P2P offer exchanges for audio chat.
+            const offers = Array.from(this.session.p2pOffers.entries());
+            if (offers.length > 0) {
+                rtcManager.send({ type: 'p2p-offer-list', offers });
+            }
+            rtcManager.send({ type: 'request-p2p-offer' });
         }
-
-        if (offers.length > 0) {
-          rtcManager.send({ type: 'p2p-offer-list', offers });
-        }
-
-        // 2. Request a new P2P offer from this player to share with others
-        rtcManager.send({ type: 'request-p2p-offer' });
-      }
     };
 
     rtcManager.onmessage = (msg) => this._handleMessage(peerId, msg);
@@ -276,12 +317,17 @@ export class CommunicationManager {
       case 'layer-deleted':
       case 'layer-visibility-changed':
       case 'layer-renamed':
+      case 'layer-background-changed':
+      case 'layer-background-cleared':
+      case 'layer-background-scaled':
+      case 'layer-background-moved':
+      case 'ping':
         this.session.eventHandler.handleEvent(msg);
         break;
 
       case 'token-move-request':
         if (this.session.role === 'gm') {
-          const layer = this.session.vtt.layers.find(l => l.id === msg.layerId);
+          const layer = this.session.eventHandler.boardState.findLayer(msg.layerId);
           const token = layer?.tokens.find(t => t.id === msg.tokenId);
           if (token) {
             this.broadcastMessage({ type: 'token-moved', layerId: msg.layerId, tokenId: msg.tokenId, x: msg.x, y: msg.y });
@@ -293,7 +339,7 @@ export class CommunicationManager {
         if (this.session.role === 'gm') {
           const changes = [];
           // Unclaim any other token owned by the requesting player
-          this.session.vtt.layers.forEach(l => {
+          this.session.eventHandler.boardState.layers.forEach(l => {
               l.tokens.forEach(t => {
                   if (t.peerId === peerId) {
                       changes.push({ layerId: l.id, tokenId: t.id, newOwner: null });
@@ -301,7 +347,7 @@ export class CommunicationManager {
               });
           });
           // Claim the new token
-          const layer = this.session.vtt.layers.find(l => l.id === msg.layerId);
+          const layer = this.session.eventHandler.boardState.findLayer(msg.layerId);
           const token = layer?.tokens.find(t => t.id === msg.tokenId);
           if (token) {
               changes.push({ layerId: layer.id, tokenId: token.id, newOwner: peerId });
@@ -312,7 +358,7 @@ export class CommunicationManager {
 
       case 'unclaim-token-request':
         if (this.session.role === 'gm') {
-            const layer = this.session.vtt.layers.find(l => l.id === msg.layerId);
+            const layer = this.session.eventHandler.boardState.findLayer(msg.layerId);
             const token = layer?.tokens.find(t => t.id === msg.tokenId);
             if (token && token.peerId === peerId) {
                 const changes = [{ layerId: layer.id, tokenId: token.id, newOwner: null }];

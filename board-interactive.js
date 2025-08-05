@@ -104,6 +104,31 @@ class EventHandler {
                     layerToRename.name = event.name;
                 }
                 break;
+            case 'layer-background-changed':
+                const layerToChangeBg = this.boardState.findLayer(event.layerId);
+                if (layerToChangeBg) {
+                    layerToChangeBg.background = event.background;
+                }
+                break;
+            case 'layer-background-cleared':
+                const layerToClearBg = this.boardState.findLayer(event.layerId);
+                if (layerToClearBg) {
+                    layerToClearBg.background = null;
+                }
+                break;
+            case 'layer-background-scaled':
+                const layerToScaleBg = this.boardState.findLayer(event.layerId);
+                if (layerToScaleBg && layerToScaleBg.background) {
+                    layerToScaleBg.background.scale = event.scale;
+                }
+                break;
+            case 'layer-background-moved':
+                const layerToMoveBg = this.boardState.findLayer(event.layerId);
+                if (layerToMoveBg && layerToMoveBg.background) {
+                    layerToMoveBg.background.x = event.x;
+                    layerToMoveBg.background.y = event.y;
+                }
+                break;
         }
         this.onStateChange();
     }
@@ -118,6 +143,8 @@ class Board {
         this.onTokenMoveRequested = config.onTokenMoveRequested || (() => {});
         this.onPingRequested = config.onPingRequested || (() => {});
         this.onTokenSelected = config.onTokenSelected || (() => {});
+        this.onTokenContextMenu = config.onTokenContextMenu || (() => {});
+        this.onBackgroundMoveRequested = config.onBackgroundMoveRequested || (() => {});
 
         this.scale = 1;
         this.panX = 0;
@@ -129,6 +156,10 @@ class Board {
         this.selectedTokenId = null;
         this.selectedTokenLayerId = null;
         this.mouseDownPos = null;
+        this.backgroundImages = new Map();
+        this.backgroundEditLayerId = null;
+        this.isDraggingBackground = false;
+        this.longPressTimeout = null;
 
         this.lastPanX = 0;
         this.lastPanY = 0;
@@ -145,12 +176,26 @@ class Board {
         this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
         this.canvas.addEventListener('wheel', (e) => this.onWheel(e));
         this.canvas.addEventListener('dblclick', (e) => this.onDoubleClick(e));
+        this.canvas.addEventListener('contextmenu', (e) => this.onContextMenu(e));
 
         this.canvas.addEventListener('touchstart', (e) => this.onTouchStart(e));
         this.canvas.addEventListener('touchend', (e) => this.onTouchEnd(e));
         this.canvas.addEventListener('touchmove', (e) => this.onTouchMove(e));
 
         this.startAnimationLoop();
+    }
+
+    toggleBackgroundEditMode(layerId) {
+        if (this.backgroundEditLayerId === layerId) {
+            this.backgroundEditLayerId = null;
+        } else {
+            this.backgroundEditLayerId = layerId;
+        }
+    }
+
+    centerOn(x, y) {
+        this.panX = (this.canvas.width / 2) - (x * this.scale);
+        this.panY = (this.canvas.height / 2) - (y * this.scale);
     }
 
     startAnimationLoop() {
@@ -174,8 +219,15 @@ class Board {
     }
 
     resizeCanvas() {
-        this.canvas.width = window.innerWidth;
-        this.canvas.height = window.innerHeight;
+        const displayWidth  = this.canvas.clientWidth;
+        const displayHeight = this.canvas.clientHeight;
+
+        if (this.canvas.width  !== displayWidth ||
+            this.canvas.height !== displayHeight) {
+
+          this.canvas.width  = displayWidth;
+          this.canvas.height = displayHeight;
+        }
     }
 
     draw() {
@@ -184,11 +236,36 @@ class Board {
         this.ctx.translate(this.panX, this.panY);
         this.ctx.scale(this.scale, this.scale);
 
+        this.drawBackgrounds();
         this.drawGrid();
         this.drawTokens();
         this.drawPings();
 
         this.ctx.restore();
+    }
+
+    drawBackgrounds() {
+        this.boardState.layers.forEach(layer => {
+            const isVisible = layer.visible || this.role === 'gm';
+            if (!isVisible || !layer.background || !layer.background.url) return;
+
+            const originalAlpha = this.ctx.globalAlpha;
+            if (!layer.visible && this.role === 'gm') {
+                this.ctx.globalAlpha = 0.5;
+            }
+
+            if (!this.backgroundImages.has(layer.background.url)) {
+                const img = new Image();
+                img.src = layer.background.url;
+                this.backgroundImages.set(layer.background.url, img);
+            }
+            const img = this.backgroundImages.get(layer.background.url);
+            if (img.complete) {
+                this.ctx.drawImage(img, layer.background.x || 0, layer.background.y || 0, layer.background.width * layer.background.scale, layer.background.height * layer.background.scale);
+            }
+
+            this.ctx.globalAlpha = originalAlpha;
+        });
     }
 
     drawGrid() {
@@ -226,8 +303,16 @@ class Board {
             layer.tokens.forEach(token => {
                 this.ctx.beginPath();
                 this.ctx.arc(token.x, token.y, 20, 0, 2 * Math.PI);
+
+                if (token.peerId) {
+                    this.ctx.shadowColor = 'white';
+                    this.ctx.shadowBlur = 15;
+                }
+
                 this.ctx.fillStyle = token.color;
                 this.ctx.fill();
+
+                this.ctx.shadowBlur = 0;
 
                 if (token.id === this.selectedTokenId) {
                     this.ctx.strokeStyle = 'yellow';
@@ -265,8 +350,19 @@ class Board {
     }
 
     onMouseDown(e) {
+        if (e.button === 2) { // Right-click
+            return;
+        }
         const pos = this.getMousePos(e);
         this.mouseDownPos = { x: e.clientX, y: e.clientY };
+
+        if (this.backgroundEditLayerId) {
+            const layer = this.boardState.findLayer(this.backgroundEditLayerId);
+            if (layer && layer.background) {
+                this.isDraggingBackground = true;
+                return;
+            }
+        }
 
         for (const layer of [...this.boardState.layers].reverse()) {
             const isInteractable = layer.visible || this.role === 'gm';
@@ -290,7 +386,20 @@ class Board {
     }
 
     onMouseUp(e) {
-        if (this.draggedToken) {
+        if (e.button === 2) { // Right-click
+            this.draggedToken = null;
+            this.draggedTokenLayerId = null;
+            this.isPanning = false;
+            return;
+        }
+
+        if (this.isDraggingBackground) {
+            const layer = this.boardState.findLayer(this.backgroundEditLayerId);
+            if (layer && layer.background) {
+                this.onBackgroundMoveRequested(this.backgroundEditLayerId, layer.background.x, layer.background.y);
+            }
+            this.isDraggingBackground = false;
+        } else if (this.draggedToken) {
             const mouseUpPos = { x: e.clientX, y: e.clientY };
             const moveDist = Math.sqrt(Math.pow(mouseUpPos.x - this.mouseDownPos.x, 2) + Math.pow(mouseUpPos.y - this.mouseDownPos.y, 2));
 
@@ -318,13 +427,38 @@ class Board {
         this.isPanning = false;
     }
 
+    onContextMenu(e) {
+        e.preventDefault();
+        const pos = this.getMousePos(e);
+        for (const layer of [...this.boardState.layers].reverse()) {
+            const isInteractable = layer.visible || this.role === 'gm';
+            if (!isInteractable) continue;
+
+            for (const token of [...layer.tokens].reverse()) {
+                const dx = pos.x - token.x;
+                const dy = pos.y - token.y;
+                if (Math.sqrt(dx * dx + dy * dy) < 20) {
+                    this.onTokenContextMenu(layer.id, token.id, e.clientX, e.clientY);
+                    return;
+                }
+            }
+        }
+    }
+
     onDoubleClick(e) {
         const pos = this.getMousePos(e);
         this.onPingRequested(pos);
     }
 
     onMouseMove(e) {
-        if (this.draggedToken) {
+        if (this.isDraggingBackground) {
+            const layer = this.boardState.findLayer(this.backgroundEditLayerId);
+            if (layer && layer.background) {
+                const pos = this.getMousePos(e);
+                layer.background.x = pos.x - (layer.background.width * layer.background.scale / 2);
+                layer.background.y = pos.y - (layer.background.height * layer.background.scale / 2);
+            }
+        } else if (this.draggedToken) {
             const pos = this.getMousePos(e);
             this.draggedToken.x = pos.x;
             this.draggedToken.y = pos.y;
@@ -361,6 +495,31 @@ class Board {
             const pos = this.getMousePos(touch);
             this.mouseDownPos = { x: touch.clientX, y: touch.clientY };
 
+            this.longPressTimeout = setTimeout(() => {
+                for (const layer of [...this.boardState.layers].reverse()) {
+                    const isInteractable = layer.visible || this.role === 'gm';
+                    if (!isInteractable) continue;
+
+                    for (const token of [...layer.tokens].reverse()) {
+                        const dx = pos.x - token.x;
+                        const dy = pos.y - token.y;
+                        if (Math.sqrt(dx * dx + dy * dy) < 20) {
+                            this.onTokenContextMenu(layer.id, token.id, touch.clientX, touch.clientY);
+                            this.longPressTimeout = null;
+                            return;
+                        }
+                    }
+                }
+            }, 500);
+
+            if (this.backgroundEditLayerId) {
+                const layer = this.boardState.findLayer(this.backgroundEditLayerId);
+                if (layer && layer.background) {
+                    this.isDraggingBackground = true;
+                    return;
+                }
+            }
+
             for (const layer of [...this.boardState.layers].reverse()) {
                 const isInteractable = layer.visible || this.role === 'gm';
                 if (!isInteractable) continue;
@@ -389,10 +548,20 @@ class Board {
     }
 
     onTouchEnd(e) {
+        if (this.longPressTimeout) {
+            clearTimeout(this.longPressTimeout);
+        }
+
         const currentTime = new Date().getTime();
         const tapLength = currentTime - this.lastTap;
 
-        if (this.draggedToken) {
+        if (this.isDraggingBackground) {
+            const layer = this.boardState.findLayer(this.backgroundEditLayerId);
+            if (layer && layer.background) {
+                this.onBackgroundMoveRequested(this.backgroundEditLayerId, layer.background.x, layer.background.y);
+            }
+            this.isDraggingBackground = false;
+        } else if (this.draggedToken) {
             const touch = e.changedTouches[0];
             const moveDist = Math.sqrt(Math.pow(touch.clientX - this.mouseDownPos.x, 2) + Math.pow(touch.clientY - this.mouseDownPos.y, 2));
 
@@ -429,7 +598,17 @@ class Board {
 
     onTouchMove(e) {
         e.preventDefault();
-        if (this.draggedToken && e.touches.length === 1) {
+        if (this.longPressTimeout) {
+            clearTimeout(this.longPressTimeout);
+        }
+        if (this.isDraggingBackground && e.touches.length === 1) {
+            const layer = this.boardState.findLayer(this.backgroundEditLayerId);
+            if (layer && layer.background) {
+                const pos = this.getMousePos(e.touches[0]);
+                layer.background.x = pos.x - (layer.background.width * layer.background.scale / 2);
+                layer.background.y = pos.y - (layer.background.height * layer.background.scale / 2);
+            }
+        } else if (this.draggedToken && e.touches.length === 1) {
             const pos = this.getMousePos(e.touches[0]);
             this.draggedToken.x = pos.x;
             this.draggedToken.y = pos.y;

@@ -8,6 +8,7 @@ const mainMenu = document.getElementById('main-menu');
 const myPeerIdEl = document.getElementById('my-peer-id');
 const peerList = document.getElementById('peer-list');
 const boardCanvas = document.getElementById('board-canvas');
+const tokenContextMenu = document.getElementById('token-context-menu');
 
 // GM Layer elements
 const gmLayerControls = document.getElementById('gm-layer-controls');
@@ -64,6 +65,8 @@ const session = {
     ],
   },
   eventHandler: null, // Will be initialized later
+  backgroundEditStates: new Map(), // <layerId, boolean>
+  selectedNpcColor: '#8E24AA',
 };
 
 myPeerIdEl.textContent = session.myId;
@@ -89,7 +92,10 @@ async function initialize() {
   communicationManager = new CommunicationManager(session, ui);
 
   boardState = new BoardState();
-  eventHandler = new EventHandler(boardState, renderLayerControls);
+  eventHandler = new EventHandler(boardState, () => {
+      renderLayerControls();
+      updatePeerList();
+  });
   session.eventHandler = eventHandler;
 
   if (window.location.hash) {
@@ -144,6 +150,17 @@ async function initialize() {
           } else {
               console.log('Token deselected');
           }
+      },
+      onTokenContextMenu: (layerId, tokenId, x, y) => {
+          showTokenContextMenu(layerId, tokenId, x, y);
+      },
+      onBackgroundMoveRequested: (layerId, x, y) => {
+          communicationManager.broadcastMessage({
+              type: 'layer-background-moved',
+              layerId,
+              x,
+              y
+          });
       }
   });
 }
@@ -183,6 +200,83 @@ function closeModal(modalElement) {
   modalElement.style.display = 'none';
 }
 
+function showTokenContextMenu(layerId, tokenId, x, y) {
+    const token = boardState.findToken(layerId, tokenId);
+    if (!token) return;
+
+    const claimBtn = document.getElementById('claim-token-btn');
+    const unclaimBtn = document.getElementById('unclaim-token-btn');
+    const deleteBtn = document.getElementById('delete-token-btn');
+
+    document.getElementById('claim-token-item').style.display = token.peerId ? 'none' : 'block';
+    document.getElementById('unclaim-token-item').style.display = token.peerId === session.myId ? 'block' : 'none';
+    document.getElementById('delete-token-item').style.display = session.role === 'gm' ? 'block' : 'none';
+
+    claimBtn.onclick = () => {
+        if (session.role === 'gm') {
+            const changes = [];
+            // Unclaim any other token owned by the GM
+            boardState.layers.forEach(l => {
+                l.tokens.forEach(t => {
+                    if (t.peerId === session.myId) {
+                        changes.push({ layerId: l.id, tokenId: t.id, newOwner: null });
+                    }
+                });
+            });
+            // Claim the new token
+            changes.push({ layerId: layerId, tokenId: tokenId, newOwner: session.myId });
+            communicationManager.broadcastMessage({ type: 'token-ownership-changed', changes });
+        } else {
+            communicationManager.sendClaimTokenRequest(layerId, tokenId);
+        }
+        hideTokenContextMenu();
+    };
+
+    unclaimBtn.onclick = () => {
+        if (session.role === 'gm') {
+            const changes = [{ layerId: layerId, tokenId: tokenId, newOwner: null }];
+            communicationManager.broadcastMessage({ type: 'token-ownership-changed', changes });
+        } else {
+            communicationManager.sendUnclaimTokenRequest(layerId, tokenId);
+        }
+        hideTokenContextMenu();
+    };
+
+    deleteBtn.onclick = () => {
+        if (confirm('Are you sure you want to delete this token?')) {
+            communicationManager.broadcastMessage({ type: 'token-deleted', layerId, tokenId });
+        }
+        hideTokenContextMenu();
+    };
+
+    // Temporarily show the menu to calculate its dimensions
+    tokenContextMenu.style.visibility = 'hidden';
+    tokenContextMenu.style.display = 'block';
+
+    const menuWidth = tokenContextMenu.offsetWidth;
+    const menuHeight = tokenContextMenu.offsetHeight;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    let newX = x;
+    let newY = y;
+
+    if (x + menuWidth > viewportWidth) {
+        newX = viewportWidth - menuWidth;
+    }
+    if (y + menuHeight > viewportHeight) {
+        newY = viewportHeight - menuHeight;
+    }
+
+    tokenContextMenu.style.left = `${newX}px`;
+    tokenContextMenu.style.top = `${newY}px`;
+    tokenContextMenu.style.visibility = 'visible';
+}
+
+function hideTokenContextMenu() {
+    tokenContextMenu.style.display = 'none';
+}
+
 /** Renders the layer controls UI based on the current board state. */
 function renderLayerControls() {
     if (session.role !== 'gm') return;
@@ -194,15 +288,19 @@ function renderLayerControls() {
         li.className = 'layer-item';
         li.dataset.layerId = layer.id;
 
+        const topRow = document.createElement('div');
+        topRow.className = 'layer-controls-row';
+
         const nameSpan = document.createElement('span');
         nameSpan.className = 'peer-id-text';
         nameSpan.textContent = layer.name;
         nameSpan.addEventListener('dblclick', () => {
             const newName = prompt('Enter new layer name:', layer.name);
             if (newName && newName.trim() !== '') {
-                broadcastMessage({ type: 'layer-renamed', layerId: layer.id, name: newName });
+                communicationManager.broadcastMessage({ type: 'layer-renamed', layerId: layer.id, name: newName });
             }
         });
+        topRow.appendChild(nameSpan);
 
         const controlsDiv = document.createElement('div');
         controlsDiv.className = 'layer-item-controls';
@@ -211,8 +309,51 @@ function renderLayerControls() {
         visibilityBtn.textContent = layer.visible ? 'Visible' : 'Hidden';
         visibilityBtn.title = layer.visible ? 'Visible to players' : 'Hidden from players';
         visibilityBtn.onclick = () => {
-            broadcastMessage({ type: 'layer-visibility-changed', layerId: layer.id, visible: !layer.visible });
+            communicationManager.broadcastMessage({ type: 'layer-visibility-changed', layerId: layer.id, visible: !layer.visible });
         };
+        controlsDiv.appendChild(visibilityBtn);
+
+        const backgroundLabel = document.createElement('label');
+        backgroundLabel.className = 'button-like-label';
+        backgroundLabel.textContent = 'BG';
+        backgroundLabel.title = 'Set background image';
+
+        const backgroundInput = document.createElement('input');
+        backgroundInput.type = 'file';
+        backgroundInput.accept = 'image/*';
+        backgroundInput.style.display = 'none';
+        backgroundInput.onchange = (e) => {
+            if (e.target.files && e.target.files.length > 0) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const background = { url: event.target.result, width: 0, height: 0, scale: 1, x: 0, y: 0 };
+                    const img = new Image();
+                    img.onload = () => {
+                        background.width = img.width;
+                        background.height = img.height;
+                        communicationManager.broadcastMessage({ type: 'layer-background-changed', layerId: layer.id, background });
+                    };
+                    img.src = event.target.result;
+                };
+                reader.readAsDataURL(e.target.files[0]);
+            }
+        };
+        backgroundLabel.appendChild(backgroundInput);
+        controlsDiv.appendChild(backgroundLabel);
+
+        const isEditing = session.backgroundEditStates.get(layer.id);
+
+        if (layer.background) {
+            const editBgBtn = document.createElement('button');
+            editBgBtn.textContent = isEditing ? 'Done' : 'Edit BG';
+            editBgBtn.title = 'Toggle background editing';
+            editBgBtn.onclick = () => {
+                session.backgroundEditStates.set(layer.id, !isEditing);
+                board.toggleBackgroundEditMode(layer.id);
+                renderLayerControls();
+            };
+            controlsDiv.appendChild(editBgBtn);
+        }
 
         const addNpcBtn = document.createElement('button');
         addNpcBtn.textContent = 'NPC+';
@@ -225,24 +366,59 @@ function renderLayerControls() {
                 color: 'purple',
                 peerId: null
             };
-            broadcastMessage({ type: 'token-added', layerId: layer.id, tokenData: npcToken });
+            communicationManager.broadcastMessage({ type: 'token-added', layerId: layer.id, tokenData: npcToken });
         };
+        controlsDiv.appendChild(addNpcBtn);
 
         const deleteBtn = document.createElement('button');
         deleteBtn.textContent = 'X';
         deleteBtn.title = 'Delete Layer';
         deleteBtn.onclick = () => {
             if (confirm(`Are you sure you want to delete the layer "${layer.name}"?`)) {
-                broadcastMessage({ type: 'layer-deleted', layerId: layer.id });
+                communicationManager.broadcastMessage({ type: 'layer-deleted', layerId: layer.id });
             }
         };
-
-        controlsDiv.appendChild(visibilityBtn);
-        controlsDiv.appendChild(addNpcBtn);
         controlsDiv.appendChild(deleteBtn);
 
-        li.appendChild(nameSpan);
-        li.appendChild(controlsDiv);
+        topRow.appendChild(controlsDiv);
+        li.appendChild(topRow);
+
+        if (isEditing && layer.background) {
+            const bottomRow = document.createElement('div');
+            bottomRow.className = 'layer-edit-controls';
+
+            const clearBgBtn = document.createElement('button');
+            clearBgBtn.className = 'clear-bg-btn';
+            clearBgBtn.textContent = '✕';
+            clearBgBtn.title = 'Clear background image';
+            clearBgBtn.onclick = () => {
+                communicationManager.broadcastMessage({ type: 'layer-background-cleared', layerId: layer.id });
+            };
+            bottomRow.appendChild(clearBgBtn);
+
+            const scaleDownBtn = document.createElement('button');
+            scaleDownBtn.className = 'bg-scale-btn';
+            scaleDownBtn.textContent = '-';
+            scaleDownBtn.title = 'Scale Down Background';
+            scaleDownBtn.onclick = () => {
+                const newScale = (layer.background.scale || 1) * 0.9;
+                communicationManager.broadcastMessage({ type: 'layer-background-scaled', layerId: layer.id, scale: newScale });
+            };
+            bottomRow.appendChild(scaleDownBtn);
+
+            const scaleUpBtn = document.createElement('button');
+            scaleUpBtn.className = 'bg-scale-btn';
+            scaleUpBtn.textContent = '+';
+            scaleUpBtn.title = 'Scale Up Background';
+            scaleUpBtn.onclick = () => {
+                const newScale = (layer.background.scale || 1) * 1.1;
+                communicationManager.broadcastMessage({ type: 'layer-background-scaled', layerId: layer.id, scale: newScale });
+            };
+            bottomRow.appendChild(scaleUpBtn);
+
+            li.appendChild(bottomRow);
+        }
+
         layerList.appendChild(li);
     });
 }
@@ -251,7 +427,8 @@ function renderLayerControls() {
  * Updates peer audio volumes based on the distance between claimed tokens.
  */
 function updateDistanceBasedAudio() {
-    const myToken = findMyToken();
+    const myToken = findTokenForPeer(session.myId);
+
     if (!myToken) {
         for (const [peerId, audioEl] of session.peerAudioElements.entries()) {
             audioEl.volume = session.peerVolumes.get(peerId) ?? 1;
@@ -290,25 +467,30 @@ function updateDistanceBasedAudio() {
 }
 
 /**
- * Finds the token claimed by the current user in the session.
+ * Finds the token claimed by a given peer ID.
  * @returns {object|null} The token object or null if not found.
  */
-function findMyToken() {
+function findTokenForPeer(peerId) {
     return boardState.layers
         .flatMap(l => l.tokens)
-        .find(t => t.peerId === session.myId);
+        .find(t => t.peerId === peerId);
 }
 
 /** Renders the list of connected peers. */
 function updatePeerList() {
   peerList.innerHTML = '';
-  if (session.peers.size === 0) {
-    peerList.innerHTML = '<li>No peers connected.</li>';
-    return;
+  const allPeerIds = [session.myId, ...Array.from(session.peers.keys())];
+
+  if (allPeerIds.length <= 1 && session.role !== 'gm') {
+      peerList.innerHTML = '<li>No other peers connected.</li>';
+      return;
   }
-  const sortedPeers = Array.from(session.peers.keys()).sort((a, b) => {
+
+  const sortedPeers = allPeerIds.sort((a, b) => {
     if (a === session.gmId) return -1;
     if (b === session.gmId) return 1;
+    if (a === session.myId) return -1; // Always show self at top (after GM)
+    if (b === session.myId) return 1;
     return a.localeCompare(b);
   });
 
@@ -316,14 +498,17 @@ function updatePeerList() {
     const li = document.createElement('li');
     const peerIdText = document.createElement('span');
     peerIdText.className = 'peer-id-text';
-    peerIdText.textContent = peerId === session.gmId ? `${peerId} (GM)` : peerId;
+    let text = peerId;
+    if (peerId === session.gmId) text += ' (GM)';
+    if (peerId === session.myId) text += ' (Me)';
+    peerIdText.textContent = text;
     li.appendChild(peerIdText);
+
+    const controlsContainer = document.createElement('div');
+    controlsContainer.className = 'peer-audio-controls';
 
     const audioEl = session.peerAudioElements.get(peerId);
     if (audioEl) {
-      const controlsContainer = document.createElement('div');
-      controlsContainer.className = 'peer-audio-controls';
-
       const muteBtn = document.createElement('button');
       muteBtn.className = 'mute-btn';
       muteBtn.textContent = audioEl.muted ? 'Unmute' : 'Mute';
@@ -343,19 +528,24 @@ function updatePeerList() {
         session.peerVolumes.set(peerId, parseFloat(volumeSlider.value));
         updateDistanceBasedAudio();
       };
-
       controlsContainer.appendChild(muteBtn);
       controlsContainer.appendChild(volumeSlider);
-      li.appendChild(controlsContainer);
+    }
+
+    const token = findTokenForPeer(peerId);
+    if (token) {
+        const centerBtn = document.createElement('button');
+        centerBtn.textContent = 'Center';
+        centerBtn.onclick = () => board.centerOn(token.x, token.y);
+        controlsContainer.appendChild(centerBtn);
+    }
+
+    if (controlsContainer.children.length > 0) {
+        li.appendChild(controlsContainer);
     }
 
     peerList.appendChild(li);
   }
-}
-
-/** Sends a message to all connected peers. */
-function broadcastMessage(message) {
-  communicationManager.broadcastMessage(message);
 }
 
 async function createInvite() {
@@ -526,7 +716,7 @@ function loadBoardState(newState, sourceDescription) {
         return;
     }
 
-    broadcastMessage({ type: 'game-state-update', vtt: newState });
+    communicationManager.broadcastMessage({ type: 'game-state-update', vtt: newState });
     updateStatus(`Board state from ${sourceDescription} loaded successfully.`);
     closeModal(loadBoardDialog);
     toggleMainMenu(false);
@@ -544,6 +734,9 @@ document.addEventListener('click', (e) => {
     if (mainMenu.classList.contains('main-menu-visible') && !mainMenu.contains(e.target)) {
         toggleMainMenu(false);
     }
+    if (!tokenContextMenu.contains(e.target)) {
+        hideTokenContextMenu();
+    }
 });
 
 addLayerBtn.addEventListener('click', () => {
@@ -556,10 +749,9 @@ addLayerBtn.addEventListener('click', () => {
             visible: true,
             tokens: [],
         };
-        broadcastMessage({ type: 'layer-added', layer: newLayer });
+        communicationManager.broadcastMessage({ type: 'layer-added', layer: newLayer });
     }
 });
-
 
 // GM Dialog Listeners
 openInviteDialogBtn.addEventListener('click', (e) => {
