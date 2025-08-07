@@ -67,6 +67,7 @@ const session = {
   eventHandler: null, // Will be initialized later
   backgroundEditStates: new Map(), // <layerId, boolean>
   selectedNpcColor: '#8E24AA',
+  selectedNpcSize: 'm',
 };
 
 myPeerIdEl.textContent = session.myId;
@@ -208,10 +209,12 @@ function showTokenContextMenu(layerId, tokenId, x, y) {
     const unclaimBtn = document.getElementById('unclaim-token-btn');
     const deleteBtn = document.getElementById('delete-token-btn');
     const colorPicker = document.getElementById('token-color-picker');
+    const sizeSelector = document.getElementById('token-size-selector');
 
     document.getElementById('claim-token-item').style.display = token.peerId ? 'none' : 'block';
     document.getElementById('unclaim-token-item').style.display = token.peerId === session.myId ? 'block' : 'none';
     document.getElementById('delete-token-item').style.display = session.role === 'gm' ? 'block' : 'none';
+    document.getElementById('token-size-selector-item').style.display = 'block'; // Always show size selector
 
     claimBtn.onclick = () => {
         if (session.role === 'gm') {
@@ -262,6 +265,40 @@ function showTokenContextMenu(layerId, tokenId, x, y) {
                 });
             } else {
                 communicationManager.sendTokenColorChangeRequest(layerId, tokenId, newColor);
+            }
+            hideTokenContextMenu();
+        }
+    };
+
+    sizeSelector.onclick = (e) => {
+        if (e.target.classList.contains('token-size-option')) {
+            const newSize = e.target.dataset.size;
+            if (session.role === 'gm') {
+                communicationManager.broadcastMessage({ 
+                    type: 'token-property-changed', 
+                    layerId, 
+                    tokenId, 
+                    properties: { size: newSize } 
+                });
+            } else {
+                communicationManager.sendTokenSizeChangeRequest(layerId, tokenId, newSize);
+            }
+            hideTokenContextMenu();
+        }
+    };
+
+    sizeSelector.onclick = (e) => {
+        if (e.target.classList.contains('token-size-option')) {
+            const newSize = e.target.dataset.size;
+            if (session.role === 'gm') {
+                communicationManager.broadcastMessage({ 
+                    type: 'token-property-changed', 
+                    layerId, 
+                    tokenId, 
+                    properties: { size: newSize } 
+                });
+            } else {
+                communicationManager.sendTokenSizeChangeRequest(layerId, tokenId, newSize);
             }
             hideTokenContextMenu();
         }
@@ -435,17 +472,22 @@ function createNpcButton(layerId) {
     const container = clone.querySelector('.split-button-container');
     const mainButton = clone.querySelector('.add-npc-button');
     const dropdownButton = clone.querySelector('.open-color-picker-button');
-    const colorPicker = clone.querySelector('.color-picker');
+    const optionsPicker = clone.querySelector('.token-options-picker');
+    const sizeSelector = optionsPicker.querySelector('.token-size-selector');
+    const colorPicker = optionsPicker.querySelector('.color-picker');
 
-    // Set initial color
+    // Set initial color and size
     mainButton.style.backgroundColor = session.selectedNpcColor;
+    sizeSelector.querySelector(`[data-size="${session.selectedNpcSize}"]`).classList.add('selected');
 
     mainButton.addEventListener('click', () => {
+        const { x, y } = board.getViewportCenter();
         const npcToken = {
             id: `token_${Math.random().toString(36).substring(2, 9)}`,
-            x: 100,
-            y: 100,
+            x,
+            y,
             color: session.selectedNpcColor,
+            size: session.selectedNpcSize,
             peerId: null
         };
         communicationManager.broadcastMessage({ type: 'token-added', layerId: layerId, tokenData: npcToken });
@@ -453,16 +495,23 @@ function createNpcButton(layerId) {
 
     dropdownButton.addEventListener('click', (e) => {
         e.stopPropagation();
-        colorPicker.classList.toggle('color-picker-hidden');
+        optionsPicker.classList.toggle('token-options-picker-hidden');
+    });
+
+    sizeSelector.addEventListener('click', (e) => {
+        if (e.target.classList.contains('token-size-option')) {
+            session.selectedNpcSize = e.target.dataset.size;
+            sizeSelector.querySelectorAll('.token-size-option').forEach(opt => opt.classList.remove('selected'));
+            e.target.classList.add('selected');
+        }
     });
 
     colorPicker.addEventListener('click', (e) => {
         if (e.target.classList.contains('color-swatch')) {
             session.selectedNpcColor = e.target.style.backgroundColor;
             mainButton.style.backgroundColor = session.selectedNpcColor;
-            // render all layer controls to update the color of all buttons
             renderLayerControls();
-            colorPicker.classList.add('color-picker-hidden');
+            optionsPicker.classList.add('token-options-picker-hidden');
         }
     });
 
@@ -784,9 +833,9 @@ document.addEventListener('click', (e) => {
         hideTokenContextMenu();
     }
     // Hide all color pickers when clicking outside
-    document.querySelectorAll('.color-picker').forEach(picker => {
+    document.querySelectorAll('.token-options-picker').forEach(picker => {
         if (!picker.contains(e.target) && !picker.previousElementSibling.contains(e.target)) {
-            picker.classList.add('color-picker-hidden');
+            picker.classList.add('token-options-picker-hidden');
         }
     });
 });

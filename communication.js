@@ -219,6 +219,13 @@ export class CommunicationManager {
     }
   }
 
+  sendTokenSizeChangeRequest(layerId, tokenId, size) {
+    const gmConnection = this.session.peers.get(this.session.gmId);
+    if (gmConnection) {
+      gmConnection.send({ type: 'token-size-change-request', layerId, tokenId, size });
+    }
+  }
+
   /**
    * Sets up the data channel and connection state handlers for a given connection.
    * @param {WebRTCManager} rtcManager The manager for the connection.

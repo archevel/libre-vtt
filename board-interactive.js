@@ -153,6 +153,8 @@ class Board {
         this.draggedToken = null;
         this.draggedTokenLayerId = null;
         this.draggedTokenOriginalPos = null;
+        this.dragOffsetX = 0;
+        this.dragOffsetY = 0;
         this.selectedTokenId = null;
         this.selectedTokenLayerId = null;
         this.mouseDownPos = null;
@@ -160,6 +162,8 @@ class Board {
         this.backgroundEditLayerId = null;
         this.isDraggingBackground = false;
         this.longPressTimeout = null;
+
+        this.sizeMap = { t: 10, s: 15, m: 20, l: 45, h: 67.5, g: 90 };
 
         this.lastPanX = 0;
         this.lastPanY = 0;
@@ -196,6 +200,13 @@ class Board {
     centerOn(x, y) {
         this.panX = (this.canvas.width / 2) - (x * this.scale);
         this.panY = (this.canvas.height / 2) - (y * this.scale);
+    }
+
+    getViewportCenter() {
+        return {
+            x: (this.canvas.width / 2 - this.panX) / this.scale,
+            y: (this.canvas.height / 2 - this.panY) / this.scale,
+        };
     }
 
     startAnimationLoop() {
@@ -301,8 +312,10 @@ class Board {
             }
 
             layer.tokens.forEach(token => {
+                const radius = this.sizeMap[token.size] || 20;
+
                 this.ctx.beginPath();
-                this.ctx.arc(token.x, token.y, 20, 0, 2 * Math.PI);
+                this.ctx.arc(token.x, token.y, radius, 0, 2 * Math.PI);
 
                 if (token.peerId) {
                     this.ctx.shadowColor = 'white';
@@ -371,10 +384,13 @@ class Board {
             for (const token of [...layer.tokens].reverse()) {
                 const dx = pos.x - token.x;
                 const dy = pos.y - token.y;
-                if (Math.sqrt(dx * dx + dy * dy) < 20) {
+                const radius = this.sizeMap[token.size] || 20;
+                if (Math.sqrt(dx * dx + dy * dy) < radius) {
                     this.draggedToken = token;
                     this.draggedTokenLayerId = layer.id;
                     this.draggedTokenOriginalPos = { x: token.x, y: token.y };
+                    this.dragOffsetX = dx; // Store the offset from token center to mouse click
+                    this.dragOffsetY = dy;
                     return;
                 }
             }
@@ -437,7 +453,8 @@ class Board {
             for (const token of [...layer.tokens].reverse()) {
                 const dx = pos.x - token.x;
                 const dy = pos.y - token.y;
-                if (Math.sqrt(dx * dx + dy * dy) < 20) {
+                const radius = this.sizeMap[token.size] || 20;
+                if (Math.sqrt(dx * dx + dy * dy) < radius) {
                     this.onTokenContextMenu(layer.id, token.id, e.clientX, e.clientY);
                     return;
                 }
@@ -460,8 +477,8 @@ class Board {
             }
         } else if (this.draggedToken) {
             const pos = this.getMousePos(e);
-            this.draggedToken.x = pos.x;
-            this.draggedToken.y = pos.y;
+            this.draggedToken.x = pos.x - this.dragOffsetX;
+            this.draggedToken.y = pos.y - this.dragOffsetY;
         } else if (this.isPanning) {
             const dx = e.clientX - this.lastPanX;
             const dy = e.clientY - this.lastPanY;
@@ -501,14 +518,15 @@ class Board {
                     if (!isInteractable) continue;
 
                     for (const token of [...layer.tokens].reverse()) {
-                        const dx = pos.x - token.x;
-                        const dy = pos.y - token.y;
-                        if (Math.sqrt(dx * dx + dy * dy) < 20) {
-                            this.onTokenContextMenu(layer.id, token.id, touch.clientX, touch.clientY);
-                            this.longPressTimeout = null;
-                            return;
-                        }
+                    const dx = pos.x - token.x;
+                    const dy = pos.y - token.y;
+                    const radius = this.sizeMap[token.size] || 20;
+                    if (Math.sqrt(dx * dx + dy * dy) < radius) {
+                        this.onTokenContextMenu(layer.id, token.id, touch.clientX, touch.clientY);
+                        this.longPressTimeout = null;
+                        return;
                     }
+                }
                 }
             }, 500);
 
@@ -527,12 +545,15 @@ class Board {
                 for (const token of [...layer.tokens].reverse()) {
                     const dx = pos.x - token.x;
                     const dy = pos.y - token.y;
-                    if (Math.sqrt(dx * dx + dy * dy) < 20) {
-                        this.draggedToken = token;
-                        this.draggedTokenLayerId = layer.id;
-                        this.draggedTokenOriginalPos = { x: token.x, y: token.y };
-                        return;
-                    }
+                    const radius = this.sizeMap[token.size] || 20;
+                    if (Math.sqrt(dx * dx + dy * dy) < radius) {
+                    this.draggedToken = token;
+                    this.draggedTokenLayerId = layer.id;
+                    this.draggedTokenOriginalPos = { x: token.x, y: token.y };
+                    this.dragOffsetX = dx; // Store the offset from token center to mouse click
+                    this.dragOffsetY = dy;
+                    return;
+                }
                 }
             }
             this.isPanning = true;
@@ -610,8 +631,8 @@ class Board {
             }
         } else if (this.draggedToken && e.touches.length === 1) {
             const pos = this.getMousePos(e.touches[0]);
-            this.draggedToken.x = pos.x;
-            this.draggedToken.y = pos.y;
+            this.draggedToken.x = pos.x - this.dragOffsetX;
+            this.draggedToken.y = pos.y - this.dragOffsetY;
         } else if (e.touches.length === 1 && this.isPanning) {
             const dx = e.touches[0].clientX - this.lastTouchX;
             const dy = e.touches[0].clientY - this.lastTouchY;
