@@ -207,6 +207,7 @@ function showTokenContextMenu(layerId, tokenId, x, y) {
     const claimBtn = document.getElementById('claim-token-btn');
     const unclaimBtn = document.getElementById('unclaim-token-btn');
     const deleteBtn = document.getElementById('delete-token-btn');
+    const colorPicker = document.getElementById('token-color-picker');
 
     document.getElementById('claim-token-item').style.display = token.peerId ? 'none' : 'block';
     document.getElementById('unclaim-token-item').style.display = token.peerId === session.myId ? 'block' : 'none';
@@ -247,6 +248,23 @@ function showTokenContextMenu(layerId, tokenId, x, y) {
             communicationManager.broadcastMessage({ type: 'token-deleted', layerId, tokenId });
         }
         hideTokenContextMenu();
+    };
+
+    colorPicker.onclick = (e) => {
+        if (e.target.classList.contains('color-swatch')) {
+            const newColor = e.target.style.backgroundColor;
+            if (session.role === 'gm') {
+                communicationManager.broadcastMessage({ 
+                    type: 'token-property-changed', 
+                    layerId, 
+                    tokenId, 
+                    properties: { color: newColor } 
+                });
+            } else {
+                communicationManager.sendTokenColorChangeRequest(layerId, tokenId, newColor);
+            }
+            hideTokenContextMenu();
+        }
     };
 
     // Temporarily show the menu to calculate its dimensions

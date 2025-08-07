@@ -212,6 +212,13 @@ export class CommunicationManager {
     }
   }
 
+  sendTokenColorChangeRequest(layerId, tokenId, color) {
+    const gmConnection = this.session.peers.get(this.session.gmId);
+    if (gmConnection) {
+      gmConnection.send({ type: 'token-color-change-request', layerId, tokenId, color });
+    }
+  }
+
   /**
    * Sets up the data channel and connection state handlers for a given connection.
    * @param {WebRTCManager} rtcManager The manager for the connection.
@@ -364,6 +371,17 @@ export class CommunicationManager {
                 const changes = [{ layerId: layer.id, tokenId: token.id, newOwner: null }];
                 this.broadcastMessage({ type: 'token-ownership-changed', changes });
             }
+        }
+        break;
+
+      case 'token-color-change-request':
+        if (this.session.role === 'gm') {
+          this.broadcastMessage({ 
+              type: 'token-property-changed', 
+              layerId: msg.layerId, 
+              tokenId: msg.tokenId, 
+              properties: { color: msg.color } 
+          });
         }
         break;
 

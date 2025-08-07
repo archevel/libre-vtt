@@ -490,6 +490,13 @@ textarea {
     border-color: transparent;
 }
 
+#token-color-picker {
+    position: relative !important;
+    box-shadow: none;
+    border: none;
+    padding: 0.5rem;
+}
+
 /* Split Button Styles */
 .split-button-container {
     position: relative;
