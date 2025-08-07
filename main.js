@@ -355,19 +355,7 @@ function renderLayerControls() {
             controlsDiv.appendChild(editBgBtn);
         }
 
-        const addNpcBtn = document.createElement('button');
-        addNpcBtn.textContent = 'NPC+';
-        addNpcBtn.title = 'Add NPC Token';
-        addNpcBtn.onclick = () => {
-            const npcToken = {
-                id: `token_${Math.random().toString(36).substring(2, 9)}`,
-                x: 100,
-                y: 100,
-                color: 'purple',
-                peerId: null
-            };
-            communicationManager.broadcastMessage({ type: 'token-added', layerId: layer.id, tokenData: npcToken });
-        };
+        const addNpcBtn = createNpcButton(layer.id);
         controlsDiv.appendChild(addNpcBtn);
 
         const deleteBtn = document.createElement('button');
@@ -421,6 +409,46 @@ function renderLayerControls() {
 
         layerList.appendChild(li);
     });
+}
+
+function createNpcButton(layerId) {
+    const template = document.getElementById('npc-button-template');
+    const clone = template.content.cloneNode(true);
+    const container = clone.querySelector('.split-button-container');
+    const mainButton = clone.querySelector('.add-npc-button');
+    const dropdownButton = clone.querySelector('.open-color-picker-button');
+    const colorPicker = clone.querySelector('.color-picker');
+
+    // Set initial color
+    mainButton.style.backgroundColor = session.selectedNpcColor;
+
+    mainButton.addEventListener('click', () => {
+        const npcToken = {
+            id: `token_${Math.random().toString(36).substring(2, 9)}`,
+            x: 100,
+            y: 100,
+            color: session.selectedNpcColor,
+            peerId: null
+        };
+        communicationManager.broadcastMessage({ type: 'token-added', layerId: layerId, tokenData: npcToken });
+    });
+
+    dropdownButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        colorPicker.classList.toggle('color-picker-hidden');
+    });
+
+    colorPicker.addEventListener('click', (e) => {
+        if (e.target.classList.contains('color-swatch')) {
+            session.selectedNpcColor = e.target.style.backgroundColor;
+            mainButton.style.backgroundColor = session.selectedNpcColor;
+            // render all layer controls to update the color of all buttons
+            renderLayerControls();
+            colorPicker.classList.add('color-picker-hidden');
+        }
+    });
+
+    return container;
 }
 
 /**
@@ -737,6 +765,12 @@ document.addEventListener('click', (e) => {
     if (!tokenContextMenu.contains(e.target)) {
         hideTokenContextMenu();
     }
+    // Hide all color pickers when clicking outside
+    document.querySelectorAll('.color-picker').forEach(picker => {
+        if (!picker.contains(e.target) && !picker.previousElementSibling.contains(e.target)) {
+            picker.classList.add('color-picker-hidden');
+        }
+    });
 });
 
 addLayerBtn.addEventListener('click', () => {
