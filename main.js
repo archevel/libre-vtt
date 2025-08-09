@@ -96,6 +96,7 @@ async function initialize() {
   eventHandler = new EventHandler(boardState, () => {
       renderLayerControls();
       updatePeerList();
+      updateDistanceBasedAudio();
   });
   session.eventHandler = eventHandler;
 
@@ -524,7 +525,7 @@ function createNpcButton(layerId) {
 function updateDistanceBasedAudio() {
     const myToken = findTokenForPeer(session.myId);
 
-    if (!myToken) {
+    if (!myToken || !board || !board.sizeMap) { // board or sizeMap might not be ready on init
         for (const [peerId, audioEl] of session.peerAudioElements.entries()) {
             audioEl.volume = session.peerVolumes.get(peerId) ?? 1;
         }
@@ -532,6 +533,7 @@ function updateDistanceBasedAudio() {
     }
 
     const allTokens = boardState.layers.flatMap(l => l.tokens);
+    const gargantuanSize = board.sizeMap.g || 90; // Fallback just in case
 
     for (const [peerId, audioEl] of session.peerAudioElements.entries()) {
         const peerToken = allTokens.find(t => t.peerId === peerId);
@@ -539,23 +541,26 @@ function updateDistanceBasedAudio() {
 
         if (peerToken) {
             const distance = Math.hypot(myToken.x - peerToken.x, myToken.y - peerToken.y);
-            const minDistance = 40;
-            const maxDistance = 1200;
+
+            const minDistance = gargantuanSize; // No drop-off within this distance
+            const maxDistance = gargantuanSize * 4; // Min volume at this distance
             const minVolume = 0.05;
             let volumeRatio = 0;
 
             if (distance <= minDistance) {
                 volumeRatio = 1;
             } else if (distance < maxDistance) {
-                const invSqrDist = 1 / (distance * distance);
-                const invSqrMin = 1 / (minDistance * minDistance);
-                const invSqrMax = 1 / (maxDistance * maxDistance);
-                volumeRatio = (invSqrDist - invSqrMax) / (invSqrMin - invSqrMax);
+                // Using a quadratic curve for a smoother falloff
+                const normalizedDistance = (distance - minDistance) / (maxDistance - minDistance);
+                volumeRatio = Math.pow(1 - normalizedDistance, 2);
             }
 
             const finalVolume = minVolume + (maxVolume - minVolume) * volumeRatio;
+            console.log("new volume is", finalVolume, "for peer", peerId);
+
             audioEl.volume = finalVolume;
         } else {
+            console.log("volume set to maxVolume", maxVolume, "for peer", peerId);
             audioEl.volume = maxVolume;
         }
     }
